@@ -104,11 +104,23 @@ def _dropped_paths(hdrop):
     return paths
 
 
-def enable_file_drop(root, on_drop):
-    """Let files be dragged onto `root`; call on_drop([paths]).
+def enable_file_drop(root, drops):
+    """Let files be dragged onto `root`; put each drop on the `drops` queue.
 
     True when the OS hook is in place, False when the feature is simply
     absent — which is never a reason to fail the launch.
+
+    `drops` must be a plain queue.Queue, NOT a callback that touches Tk. The
+    window procedure runs INSIDE Tk's message pump, with Tk's internal state
+    mid-update, so re-entering Tk from it — even root.after() — crashes the
+    interpreter outright:
+
+        PyEval_RestoreThread: the function must be called with the GIL held
+
+    Parsing the dropped paths there is fine; the ctypes calls take the GIL
+    properly. Only touching Tk is fatal. So the handler hands the paths off
+    and returns immediately, and the normal event loop drains the queue —
+    the same way this program already moves subprocess output.
     """
     if not _DND_READY:
         return False
@@ -131,9 +143,7 @@ def enable_file_drop(root, on_drop):
                 paths = _dropped_paths(wparam)
                 _shell32.DragFinish(wparam)
                 if paths:
-                    # Deferred: this runs inside the message pump, so let Tk
-                    # get back to its own loop before we touch any widget.
-                    root.after(0, lambda p=paths: on_drop(p))
+                    drops.put(paths)          # plain Python only — never Tk
                 return 0
             if msg == WM_DESTROY:
                 # Hand the window back before Tk tears it down. Windows holds a
@@ -165,6 +175,10 @@ class App:
         self.root = root
         self.proc = None
         self.q = queue.Queue()
+        # Dragged files arrive here rather than going straight into the UI:
+        # the window procedure that receives them runs inside Tk's own message
+        # pump and cannot safely touch Tk at all. drain() collects them.
+        self.drop_q = queue.Queue()
         # Open on last time's choices rather than on defaults you would have to
         # change every run. Every value is re-validated: a settings file that
         # has been hand-edited or half-written must not take the window down.
@@ -270,7 +284,7 @@ class App:
 
         # Accept a dragged file as well as a chosen one. If the OS hook cannot
         # be installed the window still works; it just says so, once.
-        self.drop_ok = enable_file_drop(root, self.on_drop_files)
+        self.drop_ok = enable_file_drop(root, self.drop_q)
         if self.drop_ok:
             self.say("Drag a video onto this window, or press Choose… — then START.")
         else:
@@ -405,6 +419,15 @@ class App:
 
     def drain(self):
         """Move whatever the child has printed into the text box."""
+        # Files dragged onto the window since the last tick. Collected here,
+        # on the event loop, because the drop handler itself must not touch Tk.
+        while True:
+            try:
+                paths = self.drop_q.get_nowait()
+            except queue.Empty:
+                break
+            self.on_drop_files(paths)
+
         done = False
         while True:
             try:
