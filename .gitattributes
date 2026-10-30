@@ -1,0 +1,17 @@
+# Normalise line endings in the repository, but check .bat files out as CRLF.
+#
+# Windows batch files are much happier with CRLF, and the ones here are written
+# that way deliberately. Without an explicit rule git would normalise them to LF
+# in the repository and then hand back whatever the local setting says, so a
+# contributor with core.autocrlf=false could end up with a .bat that behaves
+# oddly. Everything else stays LF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary-ish assets, just in case one is ever added
+*.png binary
+*.jpg binary
+*.mp4 binary
+*.onnx binary
+*.tflite binary

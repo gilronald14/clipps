@@ -1,0 +1,13 @@
+# Shortsmith runtime dependencies.
+#
+# setup.bat runs `pip install -r requirements.txt` for you; this file is here so
+# the list can also be installed by hand.
+#
+# All of these are CPU-only. No CUDA, no GPU, no PyTorch.
+
+numpy
+opencv-python
+mediapipe
+pillow
+faster-whisper
+sherpa-onnx

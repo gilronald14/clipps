@@ -1,0 +1,60 @@
+# ---------------------------------------------------------------------------
+# Ignore everything, then allow only what actually ships.
+#
+# This working folder accumulated a lot of scratch during development: frame
+# dumps (ex_*, our_*, *_frames, pro_samples*), reference clones of other
+# projects (openshorts_ref, aiys_ref, donkey_ref), downloaded model weights
+# (models/, ~36 MB of third-party files), transcripts, render work dirs, and
+# the old numbered attempts now parked in legacy/.
+#
+# A whitelist is much safer than a blacklist here: forget one pattern with a
+# blacklist and you commit a few hundred MB, or someone else's source tree.
+# ---------------------------------------------------------------------------
+/*
+
+# --- the program -----------------------------------------------------------
+!.gitignore
+!.gitattributes
+!LICENSE
+!README.md
+!requirements.txt
+!install.bat
+
+# entry points
+!make_shorts.py
+!shortsmith.py
+!shortsmith_app.py
+
+# pipeline modules
+!transcribe_source.py
+!highlights_heuristic.py
+!highlights_llm.py
+!diarize.py
+
+# setup + verification
+!setup.bat
+!setup_env.py
+!download_models.py
+!doctor.py
+
+# launchers
+!Shortsmith_Drop.bat
+!Shortsmith_App.bat
+
+# maintainer diagnostics
+!tools/
+
+# --- never ----------------------------------------------------------------
+# models are fetched by download_models.py, and are third-party weights
+models/
+# other people's repositories, kept locally for reference only
+openshorts_ref/
+aiys_ref/
+donkey_ref/
+# the pre-existing attempts, kept locally but not part of this project
+legacy/
+# generated at runtime
+python_path.txt
+__pycache__/
+# machine-specific settings (source video path etc.) - never ship these
+local_config.json
