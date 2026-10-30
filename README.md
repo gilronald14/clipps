@@ -14,9 +14,19 @@ Everything runs on this PC. No upload, no account, no API key.
 `Shortsmith_Drop.bat`. A window opens, progress prints, and when it finishes the
 shorts open automatically in `%USERPROFILE%\Videos\shorts\<video name>\`.
 
-**Or use the window.** Double-click `Shortsmith_App.bat` to choose a file, set
-how many shorts, the length range, and the speech-accuracy model, then press
-START and watch the log.
+**Or use the window.** Double-click `Shortsmith_App.bat` — or the desktop icon
+the setup creates — to pick:
+
+- **Import** · `Choose…` takes any video on this PC
+- **Export** · `Change…` sets where the shorts are written
+- how many shorts, the length range, and the speech-accuracy model
+
+Then press START and watch the log.
+
+**Your choices are remembered.** The next run opens where the last one finished,
+and so does drag-and-drop — which cannot ask, so it inherits the export folder
+you set in the window. Each video gets its own subfolder under that folder, so
+clips from different videos never mix.
 
 > Drag-and-drop *onto the window itself* is not wired up — Tk needs the optional
 > `tkinterdnd2` extension for that. Drag onto the `.bat` icon instead; it is the
@@ -50,8 +60,14 @@ It clones into `%USERPROFILE%\shortsmith` and hands over to `setup.bat`. Edit th
 `REPO=` line near the top of `install.bat` to set your own URL permanently.
 
 Whichever route you take, `setup.bat` finds a Python, installs the libraries,
-downloads the model files and verifies the machine. **Re-running is safe** — it
-skips whatever is already there, so it doubles as a repair tool.
+downloads the model files, verifies the machine, and finally puts a **Shortsmith
+icon on the desktop and Start menu** so it launches like any other program.
+**Re-running is safe** — it skips whatever is already there, so it doubles as a
+repair tool. To take the icons away again:
+
+```
+python install_shortcuts.py --remove
+```
 
 To check a machine at any time, or after something misbehaves:
 
@@ -156,13 +172,18 @@ Cost is one CPU diarization pass per clip (a second or two). Disable with
 | `highlights_llm.py` | LLM moment ranking (optional) |
 | `diarize.py` | who is talking, when — CPU speaker diarization |
 | `shortsmith_app.py` | the window |
+| `settings.py` | remembers your import/export folders and options between runs |
+| `install.bat` | fetch the program from GitHub, then set it up |
 | `setup.bat` / `setup_env.py` | one-time install on a new PC |
 | `doctor.py` | checks the machine and says exactly what to fix |
 | `download_models.py` | fetches the model files, re-runnable |
+| `install_shortcuts.py` | desktop + Start menu icon |
 | `Shortsmith_Drop.bat` | drag-and-drop launcher |
 | `Shortsmith_App.bat` | opens the window |
+| `tools/` | maintainer diagnostics, not needed to run |
 
-`legacy/` holds superseded early attempts and is not used.
+Everything the program needs is in this folder. `setup.bat` is the only file you
+have to run.
 
 ---
 

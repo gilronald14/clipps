@@ -20,9 +20,20 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_OUT = os.path.join(os.path.expanduser("~"), "Videos", "shorts")
+sys.path.insert(0, _HERE)
+
+import settings                                              # noqa: E402
+
 VIDEO_TYPES = [("Video files", "*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.flv"),
                ("All files", "*.*")]
+
+
+def _num(value, cast, fallback):
+    """A remembered number, or the fallback when it is missing or unusable."""
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 class App:
@@ -30,13 +41,17 @@ class App:
         self.root = root
         self.proc = None
         self.q = queue.Queue()
-        self.src = tk.StringVar()
-        self.out = tk.StringVar(value=DEFAULT_OUT)
-        self.clips = tk.IntVar(value=7)
-        self.min_sec = tk.DoubleVar(value=20.0)
-        self.max_sec = tk.DoubleVar(value=45.0)
-        self.whisper = tk.StringVar(value="base")
-        self.use_llm = tk.BooleanVar(value=False)
+        # Open on last time's choices rather than on defaults you would have to
+        # change every run. Every value is re-validated: a settings file that
+        # has been hand-edited or half-written must not take the window down.
+        saved = settings.load()
+        self.src = tk.StringVar(value=settings.default_source())
+        self.out = tk.StringVar(value=settings.default_out())
+        self.clips = tk.IntVar(value=_num(saved.get("clips"), int, 7))
+        self.min_sec = tk.DoubleVar(value=_num(saved.get("min_sec"), float, 20.0))
+        self.max_sec = tk.DoubleVar(value=_num(saved.get("max_sec"), float, 45.0))
+        self.whisper = tk.StringVar(value=saved.get("whisper") or "base")
+        self.use_llm = tk.BooleanVar(value=bool(saved.get("use_llm")))
         self.status = tk.StringVar(value="Ready.")
 
         root.title("Shortsmith — long video to vertical shorts")
@@ -55,18 +70,23 @@ class App:
             row=row, column=0, columnspan=4, sticky="w", padx=10, pady=(0, 10))
         row += 1
 
-        ttk.Label(root, text="Video:").grid(row=row, column=0, sticky="e", **pad)
+        ttk.Label(root, text="Import video:").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(root, textvariable=self.src).grid(row=row, column=1, columnspan=2,
                                                     sticky="ew", **pad)
         ttk.Button(root, text="Choose…", command=self.pick_video).grid(
             row=row, column=3, sticky="ew", **pad)
         row += 1
 
-        ttk.Label(root, text="Save shorts to:").grid(row=row, column=0, sticky="e", **pad)
+        ttk.Label(root, text="Export shorts to:").grid(row=row, column=0, sticky="e", **pad)
         ttk.Entry(root, textvariable=self.out).grid(row=row, column=1, columnspan=2,
                                                     sticky="ew", **pad)
         ttk.Button(root, text="Change…", command=self.pick_out).grid(
             row=row, column=3, sticky="ew", **pad)
+        row += 1
+        ttk.Label(root, text="Each video gets its own subfolder here, so clips "
+                             "from different videos never mix.",
+                  foreground="#6b7280").grid(row=row, column=1, columnspan=3,
+                                             sticky="w", padx=10)
         row += 1
 
         opts = ttk.LabelFrame(root, text=" Options ")
@@ -134,16 +154,34 @@ class App:
         self.log.insert("end", line + "\n")
         self.log.see("end")
 
+    def _start_dir(self, key):
+        """A folder to open a browser at: last used, else beside the current file.
+
+        Returning None is fine — tkinter drops an initialdir of None, so the
+        dialog just falls back to its own default.
+        """
+        d = settings.get(key)
+        if d and os.path.isdir(d):
+            return d
+        cur = os.path.dirname(self.src.get().strip())
+        return cur if cur and os.path.isdir(cur) else None
+
     def pick_video(self):
-        p = filedialog.askopenfilename(title="Choose a video", filetypes=VIDEO_TYPES)
+        p = filedialog.askopenfilename(title="Choose a video to import",
+                                       filetypes=VIDEO_TYPES,
+                                       initialdir=self._start_dir("last_video_dir"))
         if p:
             self.src.set(p)
+            settings.save(source=p, last_video_dir=os.path.dirname(p))
             self.status.set("Selected: " + os.path.basename(p))
 
     def pick_out(self):
-        p = filedialog.askdirectory(title="Where should the shorts go?")
+        p = filedialog.askdirectory(title="Where should the exported shorts go?",
+                                    initialdir=self.out.get().strip() or None)
         if p:
             self.out.set(p)
+            settings.save(out=p)
+            self.status.set("Shorts will be exported to " + p)
 
     def open_out(self):
         p = self.out.get()
@@ -167,12 +205,23 @@ class App:
             messagebox.showerror("Bad length", "Minimum length must be less than maximum.")
             return
 
+        out = self.out.get().strip() or settings.default_out()
+        self.out.set(out)
+        # Remember every choice so the next run opens exactly like this one --
+        # and so drag-and-drop, which cannot ask, exports to the same place.
+        settings.save(source=src, out=out,
+                      clips=int(self.clips.get()),
+                      min_sec=float(self.min_sec.get()),
+                      max_sec=float(self.max_sec.get()),
+                      whisper=self.whisper.get(),
+                      use_llm=bool(self.use_llm.get()))
+
         cmd = [sys.executable, os.path.join(_HERE, "make_shorts.py"), src,
                "--clips", str(int(self.clips.get())),
                "--min", str(float(self.min_sec.get())),
                "--max", str(float(self.max_sec.get())),
                "--whisper", self.whisper.get(),
-               "--out", self.out.get(),
+               "--out", out,
                "--work", os.path.join(_HERE, "work")]
         if self.use_llm.get():
             cmd.append("--llm")

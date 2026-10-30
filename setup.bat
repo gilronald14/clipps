@@ -57,6 +57,12 @@ echo.
 set "RC=%ERRORLEVEL%"
 
 echo.
+echo   Adding a desktop and Start menu shortcut...
+REM Done even if a check failed above: the window still opens, it just
+REM reports the same problem, and that is more useful than no icon at all.
+%PY% "%~dp0install_shortcuts.py"
+
+echo.
 if "%RC%"=="0" (
   echo   Setup finished - you are ready to go.
 ) else (

@@ -29,6 +29,7 @@ import time
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
+import settings                                              # noqa: E402
 from transcribe_source import probe_duration, transcribe    # noqa: E402
 
 
@@ -89,8 +90,11 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("input", help="source video (mp4 / mkv / mov / ...)")
-    ap.add_argument("--out", default=os.path.join(os.path.expanduser("~"),
-                                                  "Videos", "shorts"))
+    # Default to wherever shorts were last written, so a folder chosen once in
+    # the window (or here) is remembered -- including for drag-and-drop, which
+    # has no way to ask. settings.default_out() falls back to ~/Videos/shorts.
+    ap.add_argument("--out", default=settings.default_out(),
+                    help="where to put the shorts (remembered between runs)")
     ap.add_argument("--work", default=os.path.join(_HERE, "work"))
     ap.add_argument("--clips", type=int, default=7, help="how many shorts (7)")
     ap.add_argument("--min", type=float, default=20.0, dest="min_sec")
@@ -115,6 +119,10 @@ def main():
     out = os.path.join(a.out, slug)
     os.makedirs(work, exist_ok=True)
     os.makedirs(out, exist_ok=True)
+    # Remember both choices so the next run -- and the window, and a file
+    # dropped on the launcher, none of which can ask -- starts where this one
+    # left off. A failure here is ignored; it is only a convenience.
+    settings.save(out=os.path.abspath(a.out), source=src)
     t_path = os.path.join(work, "transcript.json")
     h_path = os.path.join(work, "highlights.json")
 
