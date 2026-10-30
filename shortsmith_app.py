@@ -7,9 +7,13 @@ account or API key is needed: highlight selection runs offline.
 Launch it with shortsmith_app.bat (double-click), or:
     python shortsmith_app.py
 
-Drag-and-drop straight onto the window is not wired up because Tk needs the
-optional tkinterdnd2 extension for it — use Shortsmith_Drop.bat instead, which
-takes a dropped file on its icon.
+Three ways to give it a video, all equivalent: drag one onto this window,
+drop it on Shortsmith_Drop.bat, or press Choose…
+
+Drag-and-drop needs no extra package: Tk has no built-in file drop, so the
+window hooks the Windows facility directly (shell32 DragAcceptFiles plus
+WM_DROPFILES) instead of depending on the tkinterdnd2 Tcl extension. If that
+hook cannot be installed the window still opens and works; it just says so.
 """
 import os
 import queue
@@ -24,7 +28,8 @@ sys.path.insert(0, _HERE)
 
 import settings                                              # noqa: E402
 
-VIDEO_TYPES = [("Video files", "*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.flv"),
+VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".flv")
+VIDEO_TYPES = [("Video files", " ".join("*" + e for e in VIDEO_EXTS)),
                ("All files", "*.*")]
 
 
@@ -34,6 +39,125 @@ def _num(value, cast, fallback):
         return cast(value)
     except (TypeError, ValueError):
         return fallback
+
+
+# ----------------------------------------------------------------------
+# Drag and drop
+#
+# Tk has no built-in file drop on Windows, and the usual answer
+# (tkinterdnd2) ships a Tcl extension binary — an extra dependency that has
+# to work on whatever PC installs this. The OS facility needs none: tell
+# shell32 the window accepts drops, then read the paths out of the
+# WM_DROPFILES message it sends us.
+#
+# All of it is fail-soft. If any piece cannot be set up the window opens and
+# works exactly as before, just without accepting drops.
+# ----------------------------------------------------------------------
+WM_DROPFILES = 0x0233
+WM_DESTROY = 0x0002
+GWLP_WNDPROC = -4
+
+try:
+    import ctypes
+    from ctypes import wintypes
+
+    _user32 = ctypes.WinDLL("user32", use_last_error=True)
+    _shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    _LRESULT = ctypes.c_ssize_t
+    _WNDPROC = ctypes.WINFUNCTYPE(_LRESULT, wintypes.HWND, wintypes.UINT,
+                                  wintypes.WPARAM, wintypes.LPARAM)
+    # The ...Ptr names only exist in the 64-bit libraries; the 32-bit ones use
+    # the plain name. Take whichever this interpreter actually has.
+    _get_wndproc = getattr(_user32, "GetWindowLongPtrW", None) or _user32.GetWindowLongW
+    _set_wndproc = getattr(_user32, "SetWindowLongPtrW", None) or _user32.SetWindowLongW
+    _get_wndproc.restype = _LRESULT
+    _get_wndproc.argtypes = [wintypes.HWND, ctypes.c_int]
+    _set_wndproc.restype = _LRESULT
+    _set_wndproc.argtypes = [wintypes.HWND, ctypes.c_int, _WNDPROC]
+    _user32.CallWindowProcW.restype = _LRESULT
+    _user32.CallWindowProcW.argtypes = [_LRESULT, wintypes.HWND, wintypes.UINT,
+                                        wintypes.WPARAM, wintypes.LPARAM]
+    _shell32.DragAcceptFiles.argtypes = [wintypes.HWND, wintypes.BOOL]
+    _shell32.DragQueryFileW.restype = wintypes.UINT
+    _shell32.DragQueryFileW.argtypes = [wintypes.HANDLE, wintypes.UINT,
+                                        wintypes.LPWSTR, wintypes.UINT]
+    _shell32.DragFinish.argtypes = [wintypes.HANDLE]
+    _DND_READY = True
+except Exception:                                    # noqa: BLE001
+    _DND_READY = False
+
+
+def _dropped_paths(hdrop):
+    """The file paths inside a WM_DROPFILES handle."""
+    paths = []
+    try:
+        # Passing 0xFFFFFFFF as the index asks for the count.
+        count = _shell32.DragQueryFileW(hdrop, 0xFFFFFFFF, None, 0)
+        for i in range(count):
+            need = _shell32.DragQueryFileW(hdrop, i, None, 0)
+            buf = ctypes.create_unicode_buffer(need + 1)
+            _shell32.DragQueryFileW(hdrop, i, buf, need + 1)
+            if buf.value:
+                paths.append(buf.value)
+    except Exception:                                # noqa: BLE001
+        pass
+    return paths
+
+
+def enable_file_drop(root, on_drop):
+    """Let files be dragged onto `root`; call on_drop([paths]).
+
+    True when the OS hook is in place, False when the feature is simply
+    absent — which is never a reason to fail the launch.
+    """
+    if not _DND_READY:
+        return False
+    try:
+        # winfo_id() is Tk's own child window; Windows delivers drops to its
+        # parent wrapper, so step up one level.
+        hwnd = root.winfo_id()
+        parent = _user32.GetParent(hwnd)
+        if parent:
+            hwnd = parent
+
+        # Read the old procedure BEFORE installing ours, so the handler never
+        # has to chain through a value that is still unset.
+        previous = _get_wndproc(hwnd, GWLP_WNDPROC)
+        if not previous:
+            return False
+
+        def handler(h, msg, wparam, lparam):
+            if msg == WM_DROPFILES:
+                paths = _dropped_paths(wparam)
+                _shell32.DragFinish(wparam)
+                if paths:
+                    # Deferred: this runs inside the message pump, so let Tk
+                    # get back to its own loop before we touch any widget.
+                    root.after(0, lambda p=paths: on_drop(p))
+                return 0
+            if msg == WM_DESTROY:
+                # Hand the window back before Tk tears it down. Windows holds a
+                # raw pointer to our callback, so leaving it installed would
+                # mean calling into a Python object that is being collected.
+                try:
+                    _set_wndproc(h, GWLP_WNDPROC, previous)
+                except Exception:                    # noqa: BLE001
+                    pass
+                return _user32.CallWindowProcW(previous, h, msg, wparam, lparam)
+            return _user32.CallWindowProcW(previous, h, msg, wparam, lparam)
+
+        # Keep the callback referenced: Windows holds a raw pointer to it, so
+        # collecting it would mean calling freed memory on the next message.
+        proc = _WNDPROC(handler)
+        _set_wndproc(hwnd, GWLP_WNDPROC, proc)
+        root._drop_proc = proc
+        root._drop_previous = previous
+        root._drop_hwnd = hwnd
+
+        _shell32.DragAcceptFiles(hwnd, True)
+        return True
+    except Exception:                                # noqa: BLE001
+        return False
 
 
 class App:
@@ -93,10 +217,10 @@ class App:
         opts.grid(row=row, column=0, columnspan=4, sticky="ew", padx=10, pady=8)
         row += 1
 
-        ttk.Label(opts, text="How many shorts:").grid(row=0, column=0, padx=8, pady=8)
+        ttk.Label(opts, text="How many clips:").grid(row=0, column=0, padx=8, pady=8)
         ttk.Spinbox(opts, from_=1, to=30, width=4, textvariable=self.clips).grid(
             row=0, column=1, padx=(0, 18))
-        ttk.Label(opts, text="Clip length (seconds):").grid(row=0, column=2)
+        ttk.Label(opts, text="Length of each clip (seconds):").grid(row=0, column=2)
         ttk.Spinbox(opts, from_=8, to=120, width=4, textvariable=self.min_sec).grid(
             row=0, column=3, padx=(0, 4))
         ttk.Label(opts, text="to").grid(row=0, column=4)
@@ -144,7 +268,15 @@ class App:
         root.columnconfigure(2, weight=1)
         root.rowconfigure(row, weight=1)
 
-        self.say("Pick a video, then press START.")
+        # Accept a dragged file as well as a chosen one. If the OS hook cannot
+        # be installed the window still works; it just says so, once.
+        self.drop_ok = enable_file_drop(root, self.on_drop_files)
+        if self.drop_ok:
+            self.say("Drag a video onto this window, or press Choose… — then START.")
+        else:
+            self.say("Press Choose… to pick a video, then START.")
+            self.say("  (dragging onto the window is unavailable here; "
+                     "Shortsmith_Drop.bat still takes a dropped file)")
         self.say("Nothing is uploaded — transcription, framing and rendering all "
                  "run locally with ffmpeg and Whisper.")
         self.root.after(120, self.drain)
@@ -165,6 +297,32 @@ class App:
             return d
         cur = os.path.dirname(self.src.get().strip())
         return cur if cur and os.path.isdir(cur) else None
+
+    def on_drop_files(self, paths):
+        """A file (or several) was dragged onto the window.
+
+        A drop usually happens before anything is chosen, so this fills the
+        import field the same way Choose… does — and remembers it, so a
+        second drop of the same video later needs no thought.
+        """
+        if not paths:
+            return
+        videos = [p for p in paths
+                  if os.path.splitext(p)[1].lower() in VIDEO_EXTS]
+        if not videos:
+            self.say("Dropped, but none of those look like a video:")
+            for p in paths[:4]:
+                self.say(f"  {os.path.basename(p)}")
+            self.status.set("That wasn't a video file.")
+            return
+        chosen = videos[0]
+        self.src.set(chosen)
+        settings.save(source=chosen, last_video_dir=os.path.dirname(chosen))
+        self.say(f"Dropped: {chosen}")
+        if len(videos) > 1:
+            self.say(f"  ({len(videos)} videos dropped — using the first)")
+        self.status.set("Ready: " + os.path.basename(chosen)
+                        + " — press START when you are.")
 
     def pick_video(self):
         p = filedialog.askopenfilename(title="Choose a video to import",

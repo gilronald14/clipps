@@ -28,9 +28,12 @@ and so does drag-and-drop — which cannot ask, so it inherits the export folder
 you set in the window. Each video gets its own subfolder under that folder, so
 clips from different videos never mix.
 
-> Drag-and-drop *onto the window itself* is not wired up — Tk needs the optional
-> `tkinterdnd2` extension for that. Drag onto the `.bat` icon instead; it is the
-> same thing with fewer moving parts.
+All three routes are the same thing: **drag a file onto the window**, drop it on
+`Shortsmith_Drop.bat`, or press `Choose…`. Dropping onto the window needs no
+extra package — Tk has no built-in file drop, so the window hooks the Windows
+facility directly instead of depending on the `tkinterdnd2` Tcl extension. If
+that hook cannot be installed on some locked-down machine the window still opens
+and works, and says so once in its log.
 
 ---
 
