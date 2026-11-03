@@ -58,32 +58,19 @@ never mix.
 
 ## Install on a Windows PC
 
-`setup.bat` installs the **dependencies** of a copy you already have — it does
-not download the program. To get the program, fetch the code first:
+Three steps. That is the whole install.
 
-**With git (recommended, and it can update itself later):**
+1. **Download** — on the repository page click **Code → Download ZIP**, then
+   extract it anywhere you like.
+2. **`setup.bat`** — double-click it. Once. It finds a Python, installs the
+   libraries, downloads the 36 MB of model files and checks the machine.
+3. **`Start_Shortsmith.bat`** — double-click it whenever you want to use the
+   app. Your browser opens on it.
 
-```bat
-git clone https://github.com/YOUR-USER/YOUR-REPO.git
-cd YOUR-REPO
-setup.bat
-```
+Re-running `setup.bat` is safe: it skips whatever is already there, so it
+doubles as a repair tool.
 
-**Without git:** on the repository page click **Code → Download ZIP**, extract
-it, then double-click `setup.bat` inside the extracted folder.
-
-**Or use the helper**, which does both halves in one go:
-
-```bat
-install.bat https://github.com/YOUR-USER/YOUR-REPO.git
-```
-
-It clones into `%USERPROFILE%\shortsmith` and hands over to `setup.bat`. Edit the
-`REPO=` line near the top of `install.bat` to set your own URL permanently.
-
-Whichever route you take, `setup.bat` finds a Python, installs the libraries,
-downloads the model files and verifies the machine. **Re-running is safe** — it
-skips whatever is already there, so it doubles as a repair tool.
+If you would rather use git, `git clone` the repository and carry on from step 2.
 
 To check a machine at any time, or after something misbehaves:
 
@@ -92,8 +79,7 @@ python doctor.py
 ```
 
 It prints `[ok]` / `[FAIL]` per item with the exact fix, and exits non-zero if
-anything required is missing. It finishes by writing `python_path.txt` — the
-interpreter that passed — which the launchers then reuse instead of guessing.
+anything required is missing.
 
 **Windows 10 and 11 are both fine.** Requirements:
 
@@ -190,7 +176,6 @@ Cost is one CPU diarization pass per clip (a second or two). Disable with
 | `webapp.py` | the local web server (stdlib only — nothing to install) |
 | `webui.html` | the page it serves: import, export, options, live progress |
 | `Start_Shortsmith.bat` | starts the server and opens your browser |
-| `install.bat` | fetch the program from GitHub, then set it up |
 | `setup.bat` / `setup_env.py` | one-time install on a new PC |
 | `doctor.py` | checks the machine and says exactly what to fix |
 | `download_models.py` | fetches the model files, re-runnable |

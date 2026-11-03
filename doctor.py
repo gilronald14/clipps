@@ -142,20 +142,7 @@ try:
 except Exception:                                     # noqa: BLE001
     warn("no NVIDIA GPU seen — fine, everything here runs on the CPU")
 
-# ---- record the interpreter that passed, for the launchers
-#
-# The .bat files start the window and drag-and-drop jobs. Rather than making
-# them re-search (and risk picking a different Python, or the Windows Store
-# stub), they read this one line. Only written when everything passed, so a
-# stale or broken path is never recorded.
-PYNOTE = os.path.join(_HERE, "python_path.txt")
 failed = [m for good, m in CHECKS if not good]
-if not failed:
-    try:
-        with open(PYNOTE, "w", encoding="utf-8") as f:
-            f.write(sys.executable + "\n")
-    except OSError as e:
-        warn(f"could not write {os.path.basename(PYNOTE)} ({e})")
 
 print("\n" + "=" * 70)
 if failed:
