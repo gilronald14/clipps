@@ -32,6 +32,66 @@ sys.path.insert(0, _HERE)
 from transcribe_source import probe_duration, transcribe    # noqa: E402
 
 
+def detect_silences(source, noise="-35dB", minimum=0.20):
+    """Silent spans in the source, as (start, end) pairs.
+
+    The waveform is the authority on where a cut is safe. Transcript
+    timestamps drift, and -- more importantly -- an ASR word onset lands on the
+    consonant, so a cut placed on one chops the attack off the first word and
+    the edit sounds clipped even though every word is present.
+    """
+    r = subprocess.run(
+        ["ffmpeg", "-v", "info", "-i", source, "-af",
+         f"silencedetect=noise={noise}:d={minimum}", "-f", "null", "-"],
+        capture_output=True, text=True, timeout=3600)
+    text = (r.stderr or "")
+    spans, open_at = [], None
+    for line in text.splitlines():
+        m = re.search(r"silence_start:\s*(-?[\d.]+)", line)
+        if m:
+            open_at = max(0.0, float(m.group(1)))
+            continue
+        m = re.search(r"silence_end:\s*(-?[\d.]+)", line)
+        if m and open_at is not None:
+            end = float(m.group(1))
+            if end > open_at:
+                spans.append((open_at, end))
+            open_at = None
+    return spans
+
+
+def snap_edge(t, spans, pad=0.06, reach=2.5):
+    """Move a cut edge into the nearest real silence.
+
+    `t` is where the transcript says a sentence ends. If that already falls
+    inside silence, it is safe and stays -- only the padding is applied. If it
+    does not, the edge moves to the closest boundary of the nearest silent span
+    and then `pad` further in, so the cut lands in silence rather than on the
+    consonant of the next word.
+
+    Leaving `reach` seconds finds nothing and the time is returned untouched:
+    a clip is better slightly clipped than silently moved somewhere unrelated.
+    """
+    if not spans:
+        return t
+    best, best_gap = None, None
+    for a, b in spans:
+        if a <= t <= b:                     # already inside silence
+            best, best_gap = (a, b), 0.0
+            break
+        gap = a - t if t < a else t - b
+        if gap < reach and (best_gap is None or gap < best_gap):
+            best, best_gap = (a, b), gap
+    if best is None:
+        return t
+    a, b = best
+    if a <= t <= b:
+        # Inside, but hug the nearer side so we do not lose speech on a long
+        # pause: keep the time, it is already somewhere safely quiet.
+        return t
+    return min(b, max(a, a + pad)) if t < a else max(a, min(b, b - pad))
+
+
 def slugify(path):
     stem = os.path.splitext(os.path.basename(path))[0]
     s = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_").lower()
@@ -163,6 +223,39 @@ def main():
         m, sec = divmod(int(s), 60)
         log(f"    {k}. {m:02d}:{sec:02d}  {e - s:5.1f}s  "
             f"score {x.get('score', 0):>3}  {x.get('title', '')}")
+
+    # ---- anchor every edge on real silence
+    #
+    # The transcript decides WHICH moments are worth cutting; the waveform
+    # decides exactly WHERE. ASR word onsets land on the consonant, so an edge
+    # placed on one chops the attack off the first word -- the edit sounds
+    # clipped even though the transcript says every word is present. Padding
+    # does not rescue it because the error is systematic toward the consonant,
+    # not random drift. So find the silence either side and cut in that.
+    log("\n  anchoring cut edges on silence")
+    spans = detect_silences(src)
+    log(f"    {len(spans)} silent gap(s) in the source")
+    moved = 0
+    for x in hi:
+        s0, e0 = float(x["start_time"]), float(x["end_time"])
+        s1, e1 = snap_edge(s0, spans), snap_edge(e0, spans)
+        # Snapping must not push a clip outside the requested length range.
+        # Both edges first, then one, then neither -- never a clip that is
+        # the wrong length just because the quietest place was further away.
+        for cs, ce in ((s1, e1), (s1, e0), (s0, e1)):
+            if a.min_sec <= (ce - cs) <= a.max_sec:
+                break
+        else:
+            cs, ce = s0, e0
+        if abs(cs - s0) > 0.01 or abs(ce - e0) > 0.01:
+            moved += 1
+            log(f"    {s0:7.2f}s -> {cs:7.2f}s    {e0:7.2f}s -> {ce:7.2f}s")
+        x["start_time"], x["end_time"] = round(cs, 3), round(ce, 3)
+    log(f"    {moved} of {len(hi)} clip boundary pair(s) moved off a word onset")
+    # Written back so the renderer sees the adjusted times, and so a later
+    # --reuse is stable: an edge already inside silence snaps to itself.
+    with open(h_path, "w", encoding="utf-8") as f:
+        json.dump(res, f, indent=2)
 
     log(f"\n[3/3] rendering {len(hi)} clip(s) — this is the slow part")
     env = dict(os.environ)

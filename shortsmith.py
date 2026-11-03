@@ -159,7 +159,10 @@ MOTION_EASE = True
 # would zoom into both faces at once. Captions are burned in a later pass, so
 # a pulse can never crop the text.
 PUNCH_ENABLED = True
-PUNCH_STRENGTH = 0.075          # peak extra zoom at the middle of the pulse
+# "Err large": a move the viewer is not sure happened is worse than no move, and
+# the consistent correction on this material is more zoom, never less. A punch
+# on the face at a layout change wants ~1.10; the old 0.075 was under that.
+PUNCH_STRENGTH = 0.10           # peak extra zoom at the middle of the pulse
 PUNCH_SECONDS = 0.55            # pulse length
 PUNCH_MIN_GAP = 3.0             # never two pulses closer than this
 PUNCH_MAX_PER_SEGMENT = 3       # matches the "<=3 big zooms/min" guidance
@@ -176,7 +179,14 @@ TAIL_FADE_SECONDS = 0.40
 FONT_NAME = "Arial"
 CAPTION_FONTSIZE = 70
 CAPTION_OUTLINE = 5
-CAPTION_MARGIN_V = 320          # from the bottom, clear of platform UI
+# Distance from the bottom edge to the caption. This is not a taste setting.
+#
+# On a 9:16 post the feed covers the bottom quarter with its own caption, the
+# audio track name and the controls, and the top ~15% with its header. Burned-in
+# text in those bands is readable in your own render and invisible in the feed.
+# At the old value of 320 the caption sat ~16.7% up -- right where the platform
+# puts its own caption. Anything above y=1400 on a 1920 frame is clear.
+CAPTION_MARGIN_V = 560
 # Width is enforced in PIXELS, not characters — the old char budget was ~2x
 # over. Measured on the face libass actually renders (Arial BOLD, because the
 # style sets Bold=-1), uppercase averages ~44px per character at fontsize 70,
@@ -191,6 +201,11 @@ CAPTION_MARGIN_V = 320          # from the bottom, clear of platform UI
 # second ceiling (Netflix timed-text template; Szarkowska & Gerber-Moron,
 # PLOS ONE 2018, on reading speed). Vertical frames are narrow, so the 42-char
 # cinematic limit does not apply.
+# A caption that appears before the word is spoken is the most-reported caption
+# defect there is: the ear hears the word arrive after the text and reads it as
+# broken sync, even at a fraction of a second. Late is invisible, early is a bug,
+# so every chunk starts a little after its word's onset rather than on it.
+CAPTION_LEAD = 0.08
 CAPTION_MAX_WORDS = 4
 CAPTION_MAX_SECONDS = 2.2
 CAPTION_MAX_PX = 880            # painted-width budget in the 1080 frame
@@ -1047,7 +1062,7 @@ def build_ass(words, out_path, split_ranges):
                 (f"{{\\c&H0000D7FF&}}{x['text'].upper()}{{\\c&H00FFFFFF&}}" if j == i
                  else x["text"].upper())
                 for j, x in enumerate(ph))
-            start = w["start"]
+            start = w["start"] + CAPTION_LEAD
             if i + 1 < len(ph):
                 end = ph[i + 1]["start"]
             else:
