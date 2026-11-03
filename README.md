@@ -10,6 +10,26 @@ Everything runs on this PC. No upload, no account, no API key.
 
 ## Use it
 
+**Double-click `Start_Shortsmith.bat`.** A small console window opens and your
+browser opens on `http://127.0.0.1:8765/` — that page is the whole program:
+
+- **Import** — type or paste a path, walk the built-in folder browser (it shows
+  your actual drives), or drag a video onto the page
+- **Export** — pick any folder on this PC with the same browser
+- **Options** — how many clips, the length range, and the speech model
+- **START / Stop** — with progress streamed live as it renders
+- **Your clips** — play or download each one straight from the page
+
+Nothing leaves this PC. The server binds to `127.0.0.1` only, so it is not
+reachable from the network, and it needs no internet at all once the models are
+downloaded. Your choices are remembered in the browser between visits.
+
+> A web page cannot open a native file dialog, so the folder browser asks the
+> server what is on the disk and lets you walk it. That is why there is a
+> built-in browser rather than your usual Windows file picker.
+
+### Or the command line
+
 ```bat
 python make_shorts.py "D:/videos/podcast.mp4"
 ```
@@ -167,6 +187,9 @@ Cost is one CPU diarization pass per clip (a second or two). Disable with
 | `highlights_heuristic.py` | offline moment ranking |
 | `highlights_llm.py` | LLM moment ranking (optional) |
 | `diarize.py` | who is talking, when — CPU speaker diarization |
+| `webapp.py` | the local web server (stdlib only — nothing to install) |
+| `webui.html` | the page it serves: import, export, options, live progress |
+| `Start_Shortsmith.bat` | starts the server and opens your browser |
 | `install.bat` | fetch the program from GitHub, then set it up |
 | `setup.bat` / `setup_env.py` | one-time install on a new PC |
 | `doctor.py` | checks the machine and says exactly what to fix |

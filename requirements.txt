@@ -4,6 +4,10 @@
 # the list can also be installed by hand.
 #
 # All of these are CPU-only. No CUDA, no GPU, no PyTorch.
+#
+# The web UI (webapp.py + webui.html) deliberately adds NOTHING to this list:
+# it is built on the standard library's http.server, so there is no Flask or
+# FastAPI to install. Download the folder, run setup.bat, and it works.
 
 numpy
 opencv-python

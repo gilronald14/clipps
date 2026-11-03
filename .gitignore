@@ -29,6 +29,10 @@
 !highlights_heuristic.py
 !highlights_llm.py
 !diarize.py
+# the local web UI
+!webapp.py
+!webui.html
+!Start_Shortsmith.bat
 
 # setup + verification
 !setup.bat

@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shortsmith — long video to vertical shorts</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2a333e;
+    --ink:#e6edf3; --dim:#93a1b1; --accent:#5ea8ff; --ok:#3fb950; --bad:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  header{padding:26px 26px 6px}
+  h1{margin:0; font-size:26px; letter-spacing:-.3px}
+  header p{margin:6px 0 0; color:var(--dim); max-width:760px}
+  main{padding:18px 26px 60px; max-width:1080px}
+  .card{
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:12px; padding:16px 18px; margin-bottom:14px;
+  }
+  .card h2{
+    margin:0 0 12px; font-size:12px; letter-spacing:.9px;
+    text-transform:uppercase; color:var(--dim); font-weight:600;
+  }
+  label{display:block; font-size:12px; color:var(--dim); margin-bottom:6px}
+  .row{display:flex; gap:10px; align-items:center}
+  .row + .row{margin-top:10px}
+  input[type=text],input[type=number],select{
+    width:100%; padding:9px 11px; border-radius:8px; color:var(--ink);
+    background:var(--panel2); border:1px solid var(--line); font:inherit;
+  }
+  input:focus,select:focus{outline:none; border-color:var(--accent)}
+  button{
+    padding:9px 14px; border-radius:8px; border:1px solid var(--line);
+    background:var(--panel2); color:var(--ink); font:inherit; cursor:pointer;
+  }
+  button:hover:not(:disabled){border-color:var(--accent); color:#fff}
+  button:disabled{opacity:.45; cursor:default}
+  button.primary{
+    background:var(--accent); border-color:var(--accent);
+    color:#06101d; font-weight:600; padding:10px 22px;
+  }
+  button.primary:hover:not(:disabled){filter:brightness(1.1); color:#06101d}
+  .hint{font-size:12px; color:var(--dim); margin-top:8px}
+  .grid{display:grid; grid-template-columns:repeat(2,1fr); gap:10px}
+  .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:10px}
+  .drop{
+    margin-top:10px; border:1.5px dashed var(--line); border-radius:10px;
+    padding:16px; text-align:center; color:var(--dim); font-size:13px;
+    transition:.15s;
+  }
+  .drop.over{border-color:var(--accent); background:#132033; color:var(--ink)}
+  .drop b{color:var(--accent)}
+  #bar{height:8px; border-radius:6px; background:var(--panel2); overflow:hidden; margin:14px 0 6px}
+  #barfill{height:100%; width:0; background:var(--accent); transition:width .3s}
+  #status{font-size:13px; color:var(--dim); min-height:20px}
+  #log{
+    margin-top:10px; height:230px; overflow:auto; padding:12px;
+    background:#0a0d11; border:1px solid var(--line); border-radius:10px;
+    font:12px/1.55 Consolas,"Cascadia Mono",monospace; white-space:pre-wrap;
+    color:#c9d4e0;
+  }
+  #results{display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px}
+  .clip{background:var(--panel2); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+  .clip video{width:100%; display:block; background:#000; aspect-ratio:9/16}
+  .clip .meta{padding:9px 11px; font-size:12px}
+  .clip .meta b{display:block; margin-bottom:2px}
+  .clip .meta span{color:var(--dim)}
+  .clip a{color:var(--accent); text-decoration:none}
+  .clip a:hover{text-decoration:underline}
+  /* folder picker */
+  #modal{position:fixed; inset:0; background:#000a; display:none; z-index:50}
+  #modal.on{display:flex; align-items:center; justify-content:center}
+  .dialog{
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    width:min(720px,92vw); max-height:84vh; display:flex; flex-direction:column;
+  }
+  .dialog header{padding:16px 18px; border-bottom:1px solid var(--line); display:flex;
+    justify-content:space-between; align-items:center}
+  .dialog header b{font-size:15px}
+  #crumbs{
+    padding:10px 18px; font-size:12px; color:var(--dim); border-bottom:1px solid var(--line);
+    font-family:Consolas,monospace; word-break:break-all;
+  }
+  #listing{overflow:auto; padding:6px; flex:1; min-height:220px}
+  .item{
+    display:flex; align-items:center; gap:9px; padding:8px 11px;
+    border-radius:7px; cursor:pointer; font-size:13px;
+  }
+  .item:hover{background:var(--panel2)}
+  .item .ico{width:18px; text-align:center; opacity:.85}
+  .item .sz{margin-left:auto; color:var(--dim); font-size:11px}
+  .dialog footer{
+    padding:12px 18px; border-top:1px solid var(--line);
+    display:flex; gap:10px; justify-content:flex-end; align-items:center;
+  }
+  .dialog footer .grow{flex:1; font-size:12px; color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Shortsmith</h1>
+  <p>Turns one long video into 1080&times;1920 shorts — it finds the strong
+     moments, follows whoever is on screen, and burns real captions.
+     Everything runs on this PC. Nothing is uploaded.</p>
+</header>
+
+<main>
+  <!-- IMPORT -->
+  <section class="card">
+    <h2>Import — the video to cut up</h2>
+    <label for="source">Video file on this PC</label>
+    <div class="row">
+      <input type="text" id="source" placeholder="C:\Users\You\Videos\podcast.mp4">
+      <button id="browseSource">Browse…</button>
+    </div>
+    <div class="drop" id="drop">
+      or <b>drag a video file here</b> to use it directly
+    </div>
+  </section>
+
+  <!-- EXPORT -->
+  <section class="card">
+    <h2>Export — where the clips are saved</h2>
+    <label for="out">Folder</label>
+    <div class="row">
+      <input type="text" id="out" placeholder="C:\Users\You\Videos\shorts">
+      <button id="browseOut">Browse…</button>
+    </div>
+    <div class="hint">Each video gets its own subfolder in here, so clips from
+      different videos never mix.</div>
+  </section>
+
+  <!-- OPTIONS -->
+  <section class="card">
+    <h2>Options</h2>
+    <div class="grid3">
+      <div>
+        <label for="clips">How many clips</label>
+        <input type="number" id="clips" value="7" min="1" max="30" step="1">
+      </div>
+      <div>
+        <label for="minsec">Shortest clip (seconds)</label>
+        <input type="number" id="minsec" value="20" min="8" max="120" step="1">
+      </div>
+      <div>
+        <label for="maxsec">Longest clip (seconds)</label>
+        <input type="number" id="maxsec" value="45" min="10" max="180" step="1">
+      </div>
+    </div>
+    <div class="grid" style="margin-top:10px">
+      <div>
+        <label for="whisper">Speech accuracy</label>
+        <select id="whisper">
+          <option value="base" selected>base — fastest</option>
+          <option value="small">small — mis-hears less, slower</option>
+          <option value="medium">medium — slowest, most accurate</option>
+        </select>
+      </div>
+      <div style="display:flex; align-items:flex-end">
+        <label style="display:flex; gap:9px; align-items:center; color:var(--ink)">
+          <input type="checkbox" id="llm">
+          Use an LLM to rank moments (needs a key; offline ranking otherwise)
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- RUN -->
+  <section class="card">
+    <div class="row">
+      <button class="primary" id="start">START</button>
+      <button id="stop" disabled>Stop</button>
+      <button id="openOut">Open output folder</button>
+    </div>
+    <div id="bar"><div id="barfill"></div></div>
+    <div id="status">Ready.</div>
+    <div id="log"></div>
+  </section>
+
+  <!-- RESULTS -->
+  <section class="card" id="resultsCard" style="display:none">
+    <h2>Your clips</h2>
+    <div id="results"></div>
+  </section>
+</main>
+
+<!-- FOLDER PICKER -->
+<div id="modal">
+  <div class="dialog">
+    <header>
+      <b id="dlgTitle">Choose a folder</b>
+      <button id="dlgUp">Up</button>
+    </header>
+    <div id="crumbs">This PC</div>
+    <div id="listing"></div>
+    <footer>
+      <span class="grow" id="dlgNote"></span>
+      <button id="dlgCancel">Cancel</button>
+      <button class="primary" id="dlgUse">Use this folder</button>
+    </footer>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = n => n < 1024 ? n + ' B'
+  : n < 1048576 ? (n / 1024).toFixed(1) + ' KB'
+  : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB'
+  : (n / 1073741824).toFixed(1) + ' GB';
+
+/* ---- remembered choices (in the browser, so they survive a reload) ---- */
+const FIELDS = ['source', 'out', 'clips', 'minsec', 'maxsec', 'whisper', 'llm'];
+FIELDS.forEach(id => {
+  const el = $(id);
+  const saved = localStorage.getItem('ss_' + id);
+  if (saved !== null) {
+    if (el.type === 'checkbox') el.checked = saved === 'true';
+    else el.value = saved;
+  }
+  el.addEventListener('change', () => {
+    localStorage.setItem('ss_' + id,
+      el.type === 'checkbox' ? String(el.checked) : el.value);
+  });
+});
+
+/* ---- the folder picker -------------------------------------------------
+   A web page cannot open a native file dialog, so this asks the server what
+   is actually on the disk and lets you walk it. That is how you can see the
+   drives and pick where the clips go.                                   */
+let pickerTarget = null;
+let pickerPath = '';
+let pickerSelected = '';
+
+function fmtCrumbs(p) {
+  return p ? p : 'This PC — pick a drive';
+}
+
+async function loadFolder(path) {
+  $('listing').innerHTML = '<div class="item">Loading…</div>';
+  let data;
+  try {
+    const r = await fetch('/api/browse?path=' + encodeURIComponent(path || ''));
+    data = await r.json();
+  } catch (e) {
+    $('listing').innerHTML = '<div class="item">Could not read that folder.</div>';
+    return;
+  }
+  if (data.error) {
+    $('listing').innerHTML = '<div class="item">' + data.error + '</div>';
+    return;
+  }
+  pickerPath = data.path || '';
+  pickerSelected = pickerPath;
+  $('crumbs').textContent = fmtCrumbs(pickerPath);
+  $('dlgUp').disabled = !data.parent;
+
+  const box = $('listing');
+  box.innerHTML = '';
+  const add = (icon, name, sub, onClick, cls) => {
+    const d = document.createElement('div');
+    d.className = 'item ' + (cls || '');
+    d.innerHTML = '<span class="ico">' + icon + '</span><span>' + name +
+      '</span>' + (sub ? '<span class="sz">' + sub + '</span>' : '');
+    d.onclick = onClick;
+    box.appendChild(d);
+  };
+
+  if (data.dirs && data.dirs.length) {
+    data.dirs.forEach(d => add('📁', d.name, '', () => loadFolder(d.path)));
+  } else if (pickerPath) {
+    add('📁', '(no sub-folders here)', '', () => {}, 'dim');
+  }
+
+  if (data.videos && data.videos.length) {
+    const h = document.createElement('div');
+    h.className = 'item dim';
+    h.style.cssText = 'cursor:default;color:var(--dim);font-size:12px';
+    h.textContent = 'video files in this folder';
+    box.appendChild(h);
+    data.videos.forEach(v => add('🎬', v.name, money(v.size), () => {
+      if (pickerTarget === 'source') { $('source').value = v.path; save('source'); closePicker(); }
+    }));
+  }
+}
+
+function save(id) {
+  const el = $(id);
+  localStorage.setItem('ss_' + id,
+    el.type === 'checkbox' ? String(el.checked) : el.value);
+}
+
+function openPicker(target) {
+  pickerTarget = target;
+  $('dlgTitle').textContent = target === 'source'
+    ? 'Choose the video to import' : 'Choose where to save the clips';
+  $('dlgUse').textContent = target === 'source'
+    ? 'Use this folder' : 'Save clips here';
+  $('dlgNote').textContent = target === 'source'
+    ? 'Double-click a video above to pick it, or navigate and use the folder.'
+    : '';
+  $('modal').classList.add('on');
+  const start = target === 'source' ? $('source').value : $('out').value;
+  const guess = (start || '').replace(/[\\/][^\\/]*$/, '');
+  loadFolder(guess && (/^[A-Za-z]:/.test(guess) || guess.startsWith('/') || guess === '') ? guess : '');
+}
+
+function closePicker() {
+  $('modal').classList.remove('on');
+  pickerTarget = null;
+}
+
+$('browseSource').onclick = () => openPicker('source');
+$('browseOut').onclick = () => openPicker('out');
+$('dlgCancel').onclick = closePicker;
+$('modal').onclick = e => { if (e.target.id === 'modal') closePicker(); };
+$('dlgUp').onclick = async () => {
+  const r = await fetch('/api/browse?path=' + encodeURIComponent(pickerPath));
+  const d = await r.json();
+  if (d.parent) loadFolder(d.parent);
+};
+$('dlgUse').onclick = () => {
+  if (pickerTarget === 'source') { $('source').value = pickerSelected; save('source'); }
+  else { $('out').value = pickerSelected; save('out'); }
+  closePicker();
+};
+
+/* ---- drag a file onto the page --------------------------------------
+   The file is posted as the raw request body (no multipart), saved into
+   ./uploads, and then treated exactly like a typed path.               */
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(ev =>
+  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev =>
+  drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+
+drop.addEventListener('drop', async e => {
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  drop.innerHTML = 'Uploading <b>' + f.name + '</b> — ' + money(f.size) + '…';
+  try {
+    const r = await fetch('/api/upload?name=' + encodeURIComponent(f.name),
+      { method: 'POST', body: f });
+    const d = await r.json();
+    if (d.error) { drop.textContent = d.error; return; }
+    $('source').value = d.path;
+    save('source');
+    drop.innerHTML = 'Using <b>' + f.name + '</b> (' + money(d.size) + ')';
+  } catch (err) {
+    drop.textContent = 'Upload failed: ' + err;
+  }
+});
+
+/* ---- log, status, progress ------------------------------------------- */
+const LOG = $('log');
+function say(line) {
+  LOG.textContent += line + '\n';
+  LOG.scrollTop = LOG.scrollHeight;
+}
+function setState(s) {
+  const busy = s === 'running';
+  $('start').disabled = busy;
+  $('stop').disabled = !busy;
+  if (busy) {
+    $('status').textContent = 'Working — this is the slow part, sit back.';
+    $('barfill').style.width = '8%';
+  } else {
+    $('barfill').style.width = s === 'done' ? '100%' : '0';
+    $('status').textContent = {
+      done: 'Done — your clips are below.',
+      failed: 'That did not finish cleanly; see the log above.',
+      stopped: 'Stopped.',
+      idle: 'Ready.'
+    }[s] || s;
+  }
+}
+
+/* ---- start / stop ----------------------------------------------------- */
+$('start').onclick = async () => {
+  const body = {
+    source: $('source').value.trim(),
+    out: $('out').value.trim(),
+    clips: +$('clips').value || 7,
+    min_sec: +$('minsec').value || 20,
+    max_sec: +$('maxsec').value || 45,
+    whisper: $('whisper').value,
+    llm: $('llm').checked
+  };
+  if (!body.source) { setState('idle'); $('status').textContent = 'Pick a video first.'; return; }
+  if (!body.out) { $('status').textContent = 'Choose where to save the clips.'; return; }
+  if (body.min_sec >= body.max_sec) {
+    $('status').textContent = 'The shortest clip must be less than the longest.';
+    return;
+  }
+  LOG.textContent = '';
+  $('resultsCard').style.display = 'none';
+  $('results').innerHTML = '';
+  setState('running');
+  const r = await fetch('/api/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const d = await r.json();
+  if (d.error) { say(d.error); setState('failed'); return; }
+  watch();
+};
+
+$('stop').onclick = async () => {
+  $('status').textContent = 'Stopping…';
+  await fetch('/api/stop', { method: 'POST' });
+};
+
+/* ---- follow the render with server-sent events ------------------------
+   No websocket: the server sends one event per log line, so progress shows
+   up as it happens instead of polling for it.                          */
+let stream = null;
+function watch() {
+  if (stream) stream.close();
+  stream = new EventSource('/api/stream');
+  stream.addEventListener('log', e => say(JSON.parse(e.data)));
+  stream.addEventListener('state', e => {
+    const s = JSON.parse(e.data);
+    setState(s);
+    // On "done" do NOT close yet: the clip list is the very next event, and
+    // closing here drops it, leaving an empty results section on a good run.
+    // Only a run with no clips to come can be closed straight away.
+    if (s === 'failed' || s === 'stopped') { stream.close(); stream = null; }
+  });
+  stream.addEventListener('clips', e => {
+    showClips(JSON.parse(e.data));
+    if (stream) { stream.close(); stream = null; }
+  });
+  stream.onerror = () => { if (stream) { stream.close(); stream = null; } };
+}
+
+function showClips(clips) {
+  if (!clips || !clips.length) return;
+  const box = $('results');
+  box.innerHTML = '';
+  clips.forEach((c, i) => {
+    const d = document.createElement('div');
+    d.className = 'clip';
+    const src = '/api/file?path=' + encodeURIComponent(c.path);
+    d.innerHTML =
+      '<video controls preload="metadata" src="' + src + '"></video>' +
+      '<div class="meta"><b>Clip ' + (i + 1) + '</b>' +
+      '<span>' + c.name + ' · ' + money(c.size) + '</span><br>' +
+      '<a href="' + src + '" download>Download</a></div>';
+    box.appendChild(d);
+  });
+  $('resultsCard').style.display = 'block';
+}
+
+$('openOut').onclick = () => {
+  const p = $('out').value.trim();
+  if (!p) { $('status').textContent = 'No output folder set yet.'; return; }
+  fetch('/api/open?path=' + encodeURIComponent(p), { method: 'POST' });
+};
+
+/* If a render was already going when this page was loaded, rejoin it. */
+fetch('/api/state').then(r => r.json()).then(d => {
+  if (d.state === 'running') { $('status').textContent = 'A render is already running — following it.'; watch(); }
+  if (d.clips && d.clips.length) showClips(d.clips);
+}).catch(() => {});
+</script>
+</body>
+</html>
