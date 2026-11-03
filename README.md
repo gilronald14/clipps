@@ -10,30 +10,29 @@ Everything runs on this PC. No upload, no account, no API key.
 
 ## Use it
 
-**Drop a video onto an icon.** Drag an `.mp4` / `.mkv` / `.mov` onto
-`Shortsmith_Drop.bat`. A window opens, progress prints, and when it finishes the
-shorts open automatically in `%USERPROFILE%\Videos\shorts\<video name>\`.
+```bat
+python make_shorts.py "D:/videos/podcast.mp4"
+```
 
-**Or use the window.** Double-click `Shortsmith_App.bat` — or the desktop icon
-the setup creates — to pick:
+That is the whole thing. It probes the video, transcribes it once, ranks the
+strongest moments and renders each to 1080x1920 with face-aware framing and
+burned captions.
 
-- **Import** · `Choose…` takes any video on this PC
-- **Export** · `Change…` sets where the shorts are written
-- how many shorts, the length range, and the speech-accuracy model
+| Flag | Meaning |
+|---|---|
+| `--clips 7` | how many shorts to make |
+| `--min 20 --max 45` | the length range each clip is cut to |
+| `--out DIR` | where the shorts are written (default `~/Videos/shorts`) |
+| `--whisper base` | speech accuracy: `base` / `small` / `medium` |
+| `--open` | open the output folder when it finishes |
+| `--reuse` | reuse the cached highlights instead of re-ranking |
+| `--llm` | try the LLM ranker first (needs an endpoint and a key) |
 
-Then press START and watch the log.
+Each video gets its own subfolder under `--out`, so clips from different videos
+never mix.
 
-**Your choices are remembered.** The next run opens where the last one finished,
-and so does drag-and-drop — which cannot ask, so it inherits the export folder
-you set in the window. Each video gets its own subfolder under that folder, so
-clips from different videos never mix.
-
-All three routes are the same thing: **drag a file onto the window**, drop it on
-`Shortsmith_Drop.bat`, or press `Choose…`. Dropping onto the window needs no
-extra package — Tk has no built-in file drop, so the window hooks the Windows
-facility directly instead of depending on the `tkinterdnd2` Tcl extension. If
-that hook cannot be installed on some locked-down machine the window still opens
-and works, and says so once in its log.
+> A local **web UI** is planned, which will drive this same engine from a
+> browser. Nothing about the pipeline changes; only the front end does.
 
 ---
 
@@ -63,14 +62,8 @@ It clones into `%USERPROFILE%\shortsmith` and hands over to `setup.bat`. Edit th
 `REPO=` line near the top of `install.bat` to set your own URL permanently.
 
 Whichever route you take, `setup.bat` finds a Python, installs the libraries,
-downloads the model files, verifies the machine, and finally puts a **Shortsmith
-icon on the desktop and Start menu** so it launches like any other program.
-**Re-running is safe** — it skips whatever is already there, so it doubles as a
-repair tool. To take the icons away again:
-
-```
-python install_shortcuts.py --remove
-```
+downloads the model files and verifies the machine. **Re-running is safe** — it
+skips whatever is already there, so it doubles as a repair tool.
 
 To check a machine at any time, or after something misbehaves:
 
@@ -174,15 +167,10 @@ Cost is one CPU diarization pass per clip (a second or two). Disable with
 | `highlights_heuristic.py` | offline moment ranking |
 | `highlights_llm.py` | LLM moment ranking (optional) |
 | `diarize.py` | who is talking, when — CPU speaker diarization |
-| `shortsmith_app.py` | the window |
-| `settings.py` | remembers your import/export folders and options between runs |
 | `install.bat` | fetch the program from GitHub, then set it up |
 | `setup.bat` / `setup_env.py` | one-time install on a new PC |
 | `doctor.py` | checks the machine and says exactly what to fix |
 | `download_models.py` | fetches the model files, re-runnable |
-| `install_shortcuts.py` | desktop + Start menu icon |
-| `Shortsmith_Drop.bat` | drag-and-drop launcher |
-| `Shortsmith_App.bat` | opens the window |
 | `tools/` | maintainer diagnostics, not needed to run |
 
 Everything the program needs is in this folder. `setup.bat` is the only file you
