@@ -166,6 +166,5 @@ if failed:
 else:
     print("  READY. Render something with:")
     print('    python make_shorts.py "C:/path/to/video.mp4" --open')
-    print("  or double-click Shortsmith_App.bat")
 print("=" * 70)
 sys.exit(1 if failed else 0)

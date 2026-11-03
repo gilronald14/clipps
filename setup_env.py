@@ -120,7 +120,7 @@ def main():
     print("\n[4/4] verification")
     r = run([sys.executable, os.path.join(_HERE, "doctor.py")])
     if r.returncode == 0:
-        print("\nSetup complete. Double-click Shortsmith_App.bat, or:")
+        print("\nSetup complete. Render something with:")
         print('  python make_shorts.py "C:/path/to/video.mp4" --open')
     else:
         print("\nSetup finished but the machine is not ready yet —")
