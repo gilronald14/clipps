@@ -1057,23 +1057,45 @@ def build_ass(words, out_path, split_ranges):
     for pi, ph in enumerate(phrases):
         ph_start = ph[0]["start"]
         nxt = phrases[pi + 1][0]["start"] if pi + 1 < len(phrases) else None
+
+        # Each word is highlighted from its own onset until the next one starts,
+        # so the words tile the chunk with no space between them.
+        #
+        # The lead is applied ONCE, to the chunk. Applying it per word instead
+        # opens a CAPTION_LEAD-sized hole between every pair of words: word i
+        # would end at the next word's onset while word i+1 began CAPTION_LEAD
+        # later, so the line blanks four times a chunk and the whole caption
+        # reads as flickering. Hold the chunk back, not the words in it.
+        edges = [ph[i]["start"] for i in range(len(ph))]
+        edges[0] += CAPTION_LEAD
+        last = max(ph[-1]["end"], ph[-1]["start"] + 0.3,
+                   ph_start + CAPTION_MIN_SECONDS)
+        if nxt is not None:
+            takeover = nxt + CAPTION_LEAD
+            if takeover <= ph[-1]["start"] + 3.0:
+                # The next chunk arrives soon: hold this line exactly until it
+                # appears, so the two touch instead of leaving a lead-sized
+                # blank frame between them. Ending at `nxt` instead is the same
+                # flicker as a gap inside a chunk, just at the chunk boundary.
+                last = takeover
+            # Otherwise the next chunk is a pause away. Keep the readable
+            # minimum and let the line clear: a blank during silence is not a
+            # flicker, and parking a caption on screen for longer would be.
+        edges.append(last)
+
+        # Keep every event non-empty and in order. A word whose onset lands at
+        # or before the previous edge would otherwise leave a blank frame —
+        # the same flicker as a gap, just narrower.
+        for i in range(1, len(edges)):
+            if edges[i] <= edges[i - 1]:
+                edges[i] = edges[i - 1] + 0.01
+
         for i, w in enumerate(ph):
             hi = " ".join(
                 (f"{{\\c&H0000D7FF&}}{x['text'].upper()}{{\\c&H00FFFFFF&}}" if j == i
                  else x["text"].upper())
                 for j, x in enumerate(ph))
-            start = w["start"] + CAPTION_LEAD
-            if i + 1 < len(ph):
-                end = ph[i + 1]["start"]
-            else:
-                # Hold the final line long enough for the whole phrase to be
-                # read (>= ~0.7s on screen) — a fast talker would otherwise
-                # flash it past. Never into the next phrase, or two chunks would
-                # share the frame at once.
-                end = max(w["end"], w["start"] + 0.3,
-                          ph_start + CAPTION_MIN_SECONDS)
-                if nxt is not None and end > nxt:
-                    end = max(nxt, w["end"])
+            start, end = edges[i], edges[i + 1]
             prefix = "{\\an5}" if in_split((start + end) / 2) else ""
             lines.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,"
                          f"0,0,0,,{prefix}{hi}")
