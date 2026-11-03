@@ -258,6 +258,11 @@ class App:
         row += 1
         self.start_btn = ttk.Button(bar, text="START", command=self.start)
         self.start_btn.pack(side="left")
+        # A 47-minute source with seven clips runs for well over twenty minutes.
+        # Without a stop, the only way out of a wrong setting is Task Manager.
+        self.stop_btn = ttk.Button(bar, text="Stop", command=self.stop,
+                                   state="disabled")
+        self.stop_btn.pack(side="left", padx=8)
         self.open_btn = ttk.Button(bar, text="Open output folder",
                                    command=self.open_out, state="disabled")
         self.open_btn.pack(side="left", padx=8)
@@ -365,6 +370,31 @@ class App:
             messagebox.showwarning("Could not open", str(e))
 
     # ---------------- run ----------------
+    def stop(self):
+        """Kill the running job, and the ffmpeg processes it started.
+
+        make_shorts.py spawns ffmpeg for every stage, so terminating just the
+        Python process would leave orphaned encoders burning CPU and writing
+        into the output folder with nothing left to report to. taskkill /T
+        takes the whole tree; terminate() is the fallback.
+        """
+        if not (self.proc and self.proc.poll() is None):
+            return
+        if not messagebox.askyesno("Stop", "Stop the current job?"):
+            return
+        self.say("")
+        self.say("Stopping — closing the render and anything it started…")
+        self.status.set("Stopping…")
+        self.stop_btn.configure(state="disabled")
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.proc.pid)],
+                           capture_output=True, check=False)
+        except OSError:
+            try:
+                self.proc.terminate()
+            except OSError:
+                pass
+
     def start(self):
         src = self.src.get().strip()
         if not src or not os.path.exists(src):
@@ -402,6 +432,7 @@ class App:
         self.say(" ".join(f'"{c}"' if " " in c else c for c in cmd))
         self.say("")
         self.start_btn.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
         self.open_btn.configure(state="disabled")
         self.pb.start(12)
         self.status.set("Working — the log below updates as it goes.")
@@ -452,6 +483,7 @@ class App:
             rc = self.proc.returncode if self.proc else -1
             self.pb.stop()
             self.start_btn.configure(state="normal")
+            self.stop_btn.configure(state="disabled")
             self.open_btn.configure(state="normal")
             self.say("")
             self.say("Finished." if rc == 0 else f"Stopped with code {rc}.")
