@@ -69,6 +69,26 @@ OUT_DIR = os.environ.get("SHORTSMITH_OUT") or os.path.join(
 WORK_ROOT = os.environ.get("SHORTSMITH_WORK") or os.path.join(_HERE, "shortsmith_work")
 MODELS = os.environ.get("SHORTSMITH_MODELS") or os.path.join(_HERE, "models")
 
+# Video encoder. libx264 is the default on purpose: it is in every ffmpeg build
+# and gives the best quality per bit, which is exactly what matters when a 480p
+# source is being blown up to 1080x1920. Hardware encoders are several times
+# faster and slightly softer at the same size, so they are opt-in rather than
+# chosen silently on your behalf -- set SHORTSMITH_ENCODER to one of these.
+_HW_ENCODERS = {
+    "nvenc": ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19"],
+    "qsv": ["-c:v", "h264_qsv", "-global_quality", "20"],
+    "amf": ["-c:v", "h264_amf", "-quality", "balanced",
+            "-rc", "cqp", "-qp_i", "19", "-qp_p", "21"],
+    "videotoolbox": ["-c:v", "h264_videotoolbox", "-q:v", "60"],
+}
+ENCODER = (os.environ.get("SHORTSMITH_ENCODER") or "").lower()
+
+
+def encoder_args():
+    """The -c:v flags for this run -- software by default, hardware on request."""
+    return _HW_ENCODERS.get(ENCODER,
+                            ["-c:v", "libx264", "-preset", "medium", "-crf", "18"])
+
 TARGET_W, TARGET_H = 1080, 1920
 ASPECT_RATIO = TARGET_W / TARGET_H          # 0.5625 (9:16)
 FPS_FALLBACK = 24.0
@@ -1173,7 +1193,7 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
         run(["ffmpeg", "-y", "-loglevel", "error",
              "-ss", f"{start + t0:.4f}", "-t", f"{dur:.4f}", "-i", SRC,
              "-filter_complex", g, "-map", "[v]",
-             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+             *encoder_args(),
              "-pix_fmt", "yuv420p", "-r", f"{fps}", "-an", seg], cwd=workdir)
         segments.append(seg)
 
@@ -1224,7 +1244,7 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
     if vf_parts:
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", "stitched.mp4",
              "-vf", ",".join(vf_parts),
-             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+             *encoder_args(),
              "-pix_fmt", "yuv420p", "-c:a", "copy",
              "-movflags", "+faststart", os.path.basename(final)], cwd=workdir)
         shutil.move(os.path.join(workdir, os.path.basename(final)), final)

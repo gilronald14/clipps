@@ -87,7 +87,21 @@ anything required is missing.
 |---|---|
 | Python 3.9+ | tick "Add python.exe to PATH" when installing |
 | ffmpeg + ffprobe on PATH | `setup.bat` deliberately does **not** install this — it is a big third-party binary and a setup script should not fetch one silently. Any build with `libass` works; `doctor.py` verifies the filters it needs. |
-| ~4 GB disk, 8 GB RAM is comfortable | no GPU required — everything runs on the CPU |
+| ~4 GB disk, 8 GB RAM is comfortable | no GPU needed — it runs on the CPU |
+
+**A graphics card is optional, not required.** Nothing here needs one, and that
+is deliberate: the tool should run on whatever machine someone has. But it is
+not wasted either —
+
+* **Transcription** uses CUDA automatically when a usable GPU is present
+  (fp16 instead of int8 on the CPU, several times faster). If the driver or
+  cuDNN is missing it falls back to the CPU rather than failing.
+* **Encoding** stays on `libx264` by default, because it gives the best quality
+  per bit and that matters when a 480p source is being scaled to 1080×1920.
+  If you would rather trade a little softness for a lot of speed, set
+  `SHORTSMITH_ENCODER` to `nvenc`, `qsv`, `amf` or `videotoolbox`.
+
+`python doctor.py` reports what the machine it runs on can actually use.
 
 The folder is self-contained apart from ffmpeg and Python, so it can live on a
 USB stick or any local drive.

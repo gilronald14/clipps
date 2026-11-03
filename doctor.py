@@ -130,17 +130,46 @@ except OSError as e:
     bad(f"cannot write in {_HERE} ({e})",
         "move the folder somewhere you own, e.g. under your user profile")
 
-# ---- optional hardware note
-print("\nhardware (informational — no GPU is required)")
+# ---- what acceleration this machine can actually use
+#
+# Reported rather than required. Everything here runs on the CPU, but this
+# program is meant to be run on other people's machines, so say what this one
+# could do faster instead of assuming nobody has a graphics card.
+print("\nhardware (all optional — everything runs on the CPU without any of it)")
 try:
     r = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total",
                         "--format=csv,noheader"], capture_output=True,
                        text=True, timeout=30)
-    warn(f"GPU: {r.stdout.strip()}" if r.stdout.strip() else "no NVIDIA GPU seen")
-    warn("  rendering is CPU-based; a GPU only helps if you add the optional "
-         "upscaling tools")
+    first = (r.stdout or "").strip().splitlines()
+    warn(f"GPU: {first[0]}" if first else "no NVIDIA GPU seen")
 except Exception:                                     # noqa: BLE001
-    warn("no NVIDIA GPU seen — fine, everything here runs on the CPU")
+    warn("no NVIDIA GPU seen")
+
+try:
+    from transcribe_source import pick_device
+    _dev, _comp = pick_device(log=lambda *_a: None)
+    if _dev == "cuda":
+        ok(f"transcription will use CUDA ({_comp}) — several times faster "
+           f"than the CPU")
+    else:
+        warn(f"transcription will use the CPU ({_comp})")
+        warn("  a CUDA-capable GPU would speed transcription up several times")
+except Exception as e:                                # noqa: BLE001
+    warn(f"could not determine the transcription device ({e})")
+
+try:
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"],
+                       capture_output=True, text=True, timeout=30)
+    have = [n for n in ("h264_nvenc", "h264_qsv", "h264_amf",
+                        "h264_videotoolbox") if n in (r.stdout or "")]
+    if have:
+        warn(f"ffmpeg hardware encoders present: {', '.join(have)}")
+        warn("  not used by default — libx264 gives better quality per bit for")
+        warn("  this kind of upscale. Set SHORTSMITH_ENCODER=nvenc for speed.")
+    else:
+        warn("no ffmpeg hardware encoder — software encoding is used")
+except Exception:                                     # noqa: BLE001
+    pass
 
 failed = [m for good, m in CHECKS if not good]
 

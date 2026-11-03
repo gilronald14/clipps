@@ -46,6 +46,41 @@ def load_audio_16k(path):
     return np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
 
 
+def pick_device(log=print):
+    """The fastest transcription this machine can actually run.
+
+    A GPU is never required, but when one is present Whisper runs several times
+    faster in fp16 than int8 on the CPU. So detect rather than assume: this
+    program is meant to run on other people's machines, and hardcoding the CPU
+    would throw away most of the speed on any of them that has a graphics card.
+
+    Override with SHORTSMITH_DEVICE=cpu|cuda and SHORTSMITH_COMPUTE=<type>.
+    """
+    want = (os.environ.get("SHORTSMITH_DEVICE") or "auto").lower()
+    forced = os.environ.get("SHORTSMITH_COMPUTE")
+    if want == "cpu":
+        return "cpu", forced or "int8"
+
+    # Ask what the GPU can actually RUN, not merely whether one exists.
+    # get_cuda_device_count() answers the second question and is misleading: it
+    # returns 1 on any machine with an NVIDIA driver, including one with no
+    # cuDNN. get_supported_compute_types() answers the first.
+    try:
+        import ctranslate2                       # ships with faster-whisper
+        types = set(ctranslate2.get_supported_compute_types("cuda"))
+        # Only the reduced-precision types are worth moving for. float32 alone
+        # means an old card: it would run, but slower than int8 on the CPU.
+        for t in ("float16", "int8_float16", "bfloat16"):
+            if t in types:
+                return "cuda", forced or t
+        if want == "cuda":
+            log(f"  CUDA offers only {sorted(types)} — the CPU is faster here")
+    except Exception:                            # noqa: BLE001
+        if want == "cuda":
+            log("  asked for CUDA but it is not usable here — using the CPU")
+    return "cpu", forced or "int8"
+
+
 def transcribe(source, out_path, model="base", language="en", log=print,
                reuse=True):
     """Transcribe `source` into `out_path`. Returns True if work was done.
@@ -74,9 +109,20 @@ def transcribe(source, out_path, model="base", language="en", log=print,
     log(f"    {len(audio)/16000:.1f}s of audio")
 
     from faster_whisper import WhisperModel
-    log(f"  loading whisper '{model}' (int8, cpu) ...")
+    device, compute = pick_device(log)
+    log(f"  loading whisper '{model}' ({compute}, {device}) ...")
     t0 = time.time()
-    m = WhisperModel(model, device="cpu", compute_type="int8")
+    try:
+        m = WhisperModel(model, device=device, compute_type=compute)
+    except Exception as e:                       # noqa: BLE001
+        if device == "cpu":
+            raise
+        # A graphics card that is present but not usable -- an older driver, a
+        # missing cuDNN -- must not end the run. This has to work on machines
+        # nobody here can see, so fall back rather than fail.
+        log(f"  {device} is not usable here ({type(e).__name__}) — using the CPU")
+        device, compute = "cpu", "int8"
+        m = WhisperModel(model, device=device, compute_type=compute)
     segs, _ = m.transcribe(audio, language=language, word_timestamps=False,
                            vad_filter=True, beam_size=1)
     out_segments = []
