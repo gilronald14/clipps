@@ -23,7 +23,6 @@
 # entry points
 !make_shorts.py
 !shortsmith.py
-!shortsmith_app.py
 
 # pipeline modules
 !transcribe_source.py
@@ -36,14 +35,10 @@
 !setup_env.py
 !download_models.py
 !doctor.py
-!install_shortcuts.py
 
 # shared helpers
-!settings.py
 
 # launchers
-!Shortsmith_Drop.bat
-!Shortsmith_App.bat
 
 # maintainer diagnostics
 !tools/
