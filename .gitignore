@@ -28,6 +28,7 @@
 !highlights_heuristic.py
 !highlights_llm.py
 !diarize.py
+
 # the local web UI
 !webapp.py
 !webui.html
@@ -39,9 +40,15 @@
 !download_models.py
 !doctor.py
 
-# shared helpers
-
-# launchers
+# pictures on screen for names the speaker says
+!svg_raster.py
+!overlay_assets.py
+!overlays.py
+# only the user's own trigger list ships; fetched icons and their cache do not
+!assets/
+assets/icons/
+assets/overlays/*
+!assets/overlays/keywords.json
 
 # maintainer diagnostics
 !tools/
@@ -53,6 +60,7 @@ models/
 openshorts_ref/
 aiys_ref/
 donkey_ref/
+ihe_ref/
 # the pre-existing attempts, kept locally but not part of this project
 legacy/
 # generated at runtime

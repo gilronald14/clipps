@@ -177,6 +177,51 @@ Two honest notes:
 Cost is one CPU diarization pass per clip (a second or two). Disable with
 `SHORTSMITH_NO_DIARIZE=1` if you ever want to.
 
+## Things that appear on screen when they're named
+
+When the speaker says something you can point at, a small picture appears in the
+lower-left: the brand's mark, or a badge carrying a figure they said out loud.
+It fades in, holds about 2.5 seconds, and leaves.
+
+It only ever shows things that are **actually there**. A brand is shown because
+the speaker named it, and a badge shows the words they used. Nothing is invented,
+nothing is inferred, and a clip where nothing nameable is said gets no overlay at
+all — that is the correct result, not a failure.
+
+**Where the pictures come from**, in order:
+
+1. `assets/overlays/<name>.png` — **your own picture wins.** Drop a file in
+   named after the trigger and it is used exactly as-is, colours and all.
+2. Simple Icons (**CC0, public domain**) — brand marks, each fetched with the
+   brand's official colour so the badge themes itself.
+3. Lucide (**ISC**) — outline icons for ideas with no brand: a clock for
+   urgency, a moon for overnight.
+4. Drawn on the spot with Pillow — a number badge, or a colour emoji from the
+   Windows emoji font. These need no download, so the feature works offline.
+
+Nothing is bundled with the program: icons are fetched once and cached in
+`assets/icons/`, which is not committed.
+
+**To add your own triggers**, edit `assets/overlays/keywords.json`:
+
+```json
+[ { "match": "robot",    "asset": "bot" },
+  { "match": "a deadline", "asset": "clock" } ]
+```
+
+`match` is the word or phrase to listen for; `asset` is the picture — a brand
+name, a Lucide icon name, or the name of a file you dropped in the folder.
+
+Turn it off completely with `SHORTSMITH_OVERLAYS=0`, or adjust
+`SHORTSMITH_OVERLAY_SEC` (hold time, default `2.5`), `SHORTSMITH_OVERLAY_GAP`
+(least seconds between two, default `6`), `SHORTSMITH_OVERLAY_MAX` (most in one
+clip, default `6`).
+
+The pictures are composited **before** the captions are burned, so the captions
+always sit on top and are never hidden.
+
+---
+
 ## What's inside
 
 | File | Job |
@@ -187,6 +232,10 @@ Cost is one CPU diarization pass per clip (a second or two). Disable with
 | `highlights_heuristic.py` | offline moment ranking |
 | `highlights_llm.py` | LLM moment ranking (optional) |
 | `diarize.py` | who is talking, when — CPU speaker diarization |
+| `overlays.py` | puts a picture on screen for a name the speaker says |
+| `overlay_assets.py` | finds or draws that picture (user file → cache → free icon sets) |
+| `svg_raster.py` | turns a fetched SVG icon into a PNG, with no SVG library |
+| `assets/overlays/keywords.json` | your own trigger words — edit this |
 | `webapp.py` | the local web server (stdlib only — nothing to install) |
 | `webui.html` | the page it serves: import, export, options, live progress |
 | `Start_Shortsmith.bat` | starts the server and opens your browser |
@@ -235,3 +284,12 @@ Expect roughly: transcribe ≈ duration ÷ 8, render ≈ 3 min × number of shor
 * **A silent person stacked in frame.** The two-speaker (stacked) layout is
   chosen by who is *on screen*, not who is talking; telling a listener from a
   speaker needs an active-speaker model, which this does not have yet.
+* **A drifting crop over footage with no face in it.** During cutaway or
+  immersive B-roll the tracker has nothing to lock onto, so it repositions
+  constantly. Measured on a product-demo section: 71 repositionings, 60 of them
+  inside 1.5 s. The movement is small, but it is the one place the framing is
+  not deliberate.
+* **One brand shows no mark.** Five names people say constantly — ChatGPT, GPT,
+  Alphabet, iPhone, AWS — are not icon names anywhere, so they are mapped to the
+  company that owns them (OpenAI, Google, Apple, Amazon). If a name is neither a
+  brand nor in your keyword list, it simply gets no picture.

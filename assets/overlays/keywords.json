@@ -1,0 +1,12 @@
+[
+  { "match": "clock",      "asset": "clock" },
+  { "match": "moon",       "asset": "moon" },
+  { "match": "billions",   "asset": "circle-dollar-sign" },
+  { "match": "growing",    "asset": "trending-up" },
+  { "match": "danger",     "asset": "triangle-alert" },
+  { "match": "robot",      "asset": "bot" },
+  { "match": "brain",      "asset": "brain" },
+  { "match": "code",       "asset": "code" },
+  { "match": "computer",   "asset": "monitor" },
+  { "match": "question",   "asset": "circle-help" }
+]

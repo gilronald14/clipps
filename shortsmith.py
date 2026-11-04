@@ -47,6 +47,14 @@ import cv2
 # which is how make_shorts.py drives this file for an arbitrary input video.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
+# On-screen pictures for things the speaker actually named. Optional: a missing
+# or broken module costs the overlays, not the render, so this is imported
+# defensively rather than at the top.
+try:
+    import overlays as _overlays
+except Exception:                                       # noqa: BLE001
+    _overlays = None
+
 
 def _local_setting(key):
     """A machine-specific setting from local_config.json, or None.
@@ -211,6 +219,16 @@ CAPTION_MAX_SECONDS = 2.2
 CAPTION_MAX_PX = 880            # painted-width budget in the 1080 frame
 CAPTION_MAX_CHARS = 22          # fallback only, if the font cannot be loaded
 CAPTION_MIN_SECONDS = 0.70      # minimum time a phrase stays on screen
+
+# ---- the pictures that go on screen for things the speaker actually named
+# Restrained on purpose. rules/motion.md: "an edit where every beat is a card is
+# a slideshow with a face attached." One small picture in a corner, only for a
+# real brand name or a figure they said out loud, and never more than this many
+# in one clip.
+OVERLAY_ENABLED = (os.environ.get("SHORTSMITH_OVERLAYS", "1") or "1") != "0"
+OVERLAY_SECONDS = float(os.environ.get("SHORTSMITH_OVERLAY_SEC", "2.5"))
+OVERLAY_GAP_SECONDS = float(os.environ.get("SHORTSMITH_OVERLAY_GAP", "6.0"))
+OVERLAY_MAX = int(os.environ.get("SHORTSMITH_OVERLAY_MAX", "6"))
 CAPTION_MAX_CPS = 17.0          # characters per second ceiling
 CAPTION_FONT_FILE = "C:/Windows/Fonts/arialbd.ttf"
 CAPTION_MIN_WORDS_FOR_PUNCT_BREAK = 3   # don't break on a 1-2 word stub
@@ -1257,11 +1275,26 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
 
     # ---- 5. captions, then head/tail fades (fades last so the text fades too)
     vf_parts = []
+    hits = []
     if burn_captions:
         print("  [4/5] transcribing...")
         words = transcribe(os.path.join(workdir, "stitched.mp4"))
         if words:
             print(f"        {len(words)} words")
+            # A picture for whatever the speaker actually named. This runs
+            # BEFORE the caption pass on purpose: anything composited after the
+            # captions would be drawn over them.
+            if _overlays is not None and OVERLAY_ENABLED:
+                try:
+                    hits = _overlays.detect(words, min_gap=OVERLAY_GAP_SECONDS,
+                                            limit=OVERLAY_MAX)
+                except Exception as e:                  # noqa: BLE001
+                    print(f"        overlays skipped: {type(e).__name__}: {e}")
+                for h in hits:
+                    print(f"        overlay {h['t']:6.2f}s  {h['kind']:<7} "
+                          f"{h['label']!r} -> {os.path.basename(h['png'])}")
+                if not hits:
+                    print("        nothing nameable said — no overlays")
             ass_path = os.path.join(workdir, f"cap_{name}.ass")
             n = build_ass(words, ass_path, split_windows)
             print(f"        {n} caption events")
@@ -1278,7 +1311,29 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
     if fades:
         vf_parts.append(fades)
 
-    if vf_parts:
+    if hits:
+        # One pass, three layers in order: the pictures, then the captions, then
+        # the fades — so the text stays on top and still fades with the picture.
+        # This has to be filter_complex rather than -vf, because every picture
+        # is another input.
+        ins = _overlays.prepare_inputs(hits)
+        pre, chain, cur = _overlays.build_filters(hits, first_input=1,
+                                                  hold=OVERLAY_SECONDS,
+                                                  start_label="0:v")
+        segs = list(pre) + list(chain)
+        if vf_parts:
+            segs.append(f"[{cur}]{','.join(vf_parts)}[vout]")
+            out_lbl = "vout"
+        else:
+            out_lbl = cur
+        run(["ffmpeg", "-y", "-loglevel", "error", "-i", "stitched.mp4", *ins,
+             "-filter_complex", ";".join(segs),
+             "-map", f"[{out_lbl}]", "-map", "0:a?",
+             *encoder_args(),
+             "-pix_fmt", "yuv420p", "-c:a", "copy",
+             "-movflags", "+faststart", os.path.basename(final)], cwd=workdir)
+        shutil.move(os.path.join(workdir, os.path.basename(final)), final)
+    elif vf_parts:
         run(["ffmpeg", "-y", "-loglevel", "error", "-i", "stitched.mp4",
              "-vf", ",".join(vf_parts),
              *encoder_args(),
