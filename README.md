@@ -222,6 +222,42 @@ always sit on top and are never hidden.
 
 ---
 
+## Movement that settles, and a sound on every action
+
+Two things were added after studying
+[lemo-opuscar](https://github.com/lemomo-ai/lemo-opuscar) (MIT), a library of
+films built entirely in code. Its rule is worth the whole exercise: **every
+visible action has a sound**, and a move should *settle* rather than stop.
+
+**A spring, not a ramp.** A graphic arriving used to grow at a constant rate and
+then stop dead. It now uses a damped spring: it overshoots to about 1.06, comes
+back under 1, and rings down onto its final size. Measured through a real
+entrance, the graphic goes 158 px → 272 px (overshoot) → 253 px (rebound) → 256
+px (settled).
+
+The damping is deliberately *not* the source's. A spring approaches its target
+and never arrives, and an entrance holds still once it is over: at the original
+damping the graphic was still 4% oversized when the animation ended, so it
+would sit wrong for the rest of its life.
+
+**A sound on every action.** A thump where a punch-in lands, a pop where a
+graphic arrives. Both are synthesised from scratch in numpy — no sound files, no
+downloads, nothing new to install. They are quiet on purpose: the speech is the
+film. Measured against the same clip rendered without them, the finished audio
+is **−14.7 LUFS either way**, with no clipping, and every effect lands within a
+frame of the action it belongs to.
+
+`easing.py` also carries the interpolation the camera would want if it ever gets
+a keyframed path: monotone cubic (Fritsch–Carlson), which is smooth through
+every keyframe but cannot overshoot between them. A plain cubic spline can, and
+on a camera that means drifting somewhere you never asked it to go — measured on
+a single-spike key set, Catmull-Rom dips to **−0.074**, i.e. a negative zoom.
+
+Turn the sound off with `SHORTSMITH_SFX=0`; adjust it with
+`SHORTSMITH_SFX_PUNCH` and `SHORTSMITH_SFX_POP` (both are linear gains).
+
+---
+
 ## What's inside
 
 | File | Job |
@@ -235,6 +271,8 @@ always sit on top and are never hidden.
 | `overlays.py` | puts a picture on screen for a name the speaker says |
 | `overlay_assets.py` | finds or draws that picture (user file → cache → free icon sets) |
 | `svg_raster.py` | turns a fetched SVG icon into a PNG, with no SVG library |
+| `easing.py` | the motion shapes: spring settles, overshoot, smooth keyframes |
+| `sfx.py` | the sound on each visible action, synthesised in numpy |
 | `assets/overlays/keywords.json` | your own trigger words — edit this |
 | `webapp.py` | the local web server (stdlib only — nothing to install) |
 | `webui.html` | the page it serves: import, export, options, live progress |
@@ -293,3 +331,9 @@ Expect roughly: transcribe ≈ duration ÷ 8, render ≈ 3 min × number of shor
   Alphabet, iPhone, AWS — are not icon names anywhere, so they are mapped to the
   company that owns them (OpenAI, Google, Apple, Amazon). If a name is neither a
   brand nor in your keyword list, it simply gets no picture.
+
+---
+
+## Credits
+
+`easing.py` and `sfx.py` are adapted from [lemo-opuscar](https://github.com/lemomo-ai/lemo-opuscar) (MIT, LemoLab), and several editing rules came from [i-hate-editing](https://github.com/ranahaani/i-hate-editing) (MIT). Fetched icons are CC0 (Simple Icons) and ISC (Lucide). Full list, with licences: [CREDITS.md](CREDITS.md).

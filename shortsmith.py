@@ -55,6 +55,18 @@ try:
 except Exception:                                       # noqa: BLE001
     _overlays = None
 
+# Easing shapes and procedural sound, both adapted from the Lemo-Opuscar films
+# (MIT). Optional in the same way: losing either costs the feature, not the
+# render.
+try:
+    import easing as _easing
+except Exception:                                       # noqa: BLE001
+    _easing = None
+try:
+    import sfx as _sfx
+except Exception:                                       # noqa: BLE001
+    _sfx = None
+
 
 def _local_setting(key):
     """A machine-specific setting from local_config.json, or None.
@@ -229,6 +241,37 @@ OVERLAY_ENABLED = (os.environ.get("SHORTSMITH_OVERLAYS", "1") or "1") != "0"
 OVERLAY_SECONDS = float(os.environ.get("SHORTSMITH_OVERLAY_SEC", "2.5"))
 OVERLAY_GAP_SECONDS = float(os.environ.get("SHORTSMITH_OVERLAY_GAP", "6.0"))
 OVERLAY_MAX = int(os.environ.get("SHORTSMITH_OVERLAY_MAX", "6"))
+
+# ---- sound on the visible actions
+# "Every visible action has a sound" -- a punch-in that lands in silence, or a
+# graphic that pops with no click, is half the moment. These are deliberately
+# quiet: the speech is the film, and the effects sit well under it.
+SFX_ENABLED = (os.environ.get("SHORTSMITH_SFX", "1") or "1") != "0"
+SFX_PUNCH_GAIN = float(os.environ.get("SHORTSMITH_SFX_PUNCH", "0.16"))
+SFX_POP_GAIN = float(os.environ.get("SHORTSMITH_SFX_POP", "0.13"))
+
+
+def _build_sfx(workdir, duration, punch_times, hits):
+    """Lay a sound on every visible action, into one stereo bed.
+
+    A thump where a punch-in lands, a pop where a graphic arrives. Returns the
+    path to the WAV, or None if we cannot write it.
+    """
+    if _sfx is None:
+        return None
+    buf = _sfx.bed(duration + 0.4)
+    for t in punch_times:
+        if 0.0 <= t < duration:
+            _sfx.add(buf, _sfx.thump(), t, gain=SFX_PUNCH_GAIN)
+    for h in hits:
+        # a touch before the graphic finishes arriving, so the sound leads the
+        # eye to it rather than trailing a frame behind
+        at = max(0.0, float(h["t"]) - 0.03)
+        if at < duration:
+            _sfx.add(buf, _sfx.pop(), at, gain=SFX_POP_GAIN, pan=-0.25)
+    path = os.path.join(workdir, "sfx.wav")
+    _sfx.write_wav(path, buf)
+    return path
 CAPTION_MAX_CPS = 17.0          # characters per second ceiling
 CAPTION_FONT_FILE = "C:/Windows/Fonts/arialbd.ttf"
 CAPTION_MIN_WORDS_FOR_PUNCT_BREAK = 3   # don't break on a 1-2 word stub
@@ -1216,6 +1259,12 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
     # decide where the fades go) line up with the segments actually rendered.
     render_list = [r for r in ranges if (r[1] - r[0]) > 0.05]
 
+    # Punch-in times come back relative to their own segment, but the sound has
+    # to land on the finished clip's timeline, so accumulate where each segment
+    # begins as we go.
+    clip_t = 0.0
+    punch_times = []
+
     for i, (t0, t1, kind, payload) in enumerate(render_list):
         dur = t1 - t0
         seg = os.path.join(workdir, f"seg_{i:03d}.mp4")
@@ -1233,6 +1282,8 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
             if punches:
                 print("        punch-in at " + ", ".join(f"{p:.1f}s" for p in punches)
                       + f"  ({PUNCH_SECONDS}s, +{PUNCH_STRENGTH*100:.0f}%)")
+                # where each punch lands on the finished clip, for the sound pass
+                punch_times.extend(clip_t + p for p in punches)
             g, cmd_path = track_graph(seg_xs, cameraman.crop_width,
                                       cameraman.crop_height, t0, fps,
                                       TARGET_W, TARGET_H, workdir, i, dur,
@@ -1251,6 +1302,7 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
              *encoder_args(),
              "-pix_fmt", "yuv420p", "-r", f"{fps}", "-an", seg], cwd=workdir)
         segments.append(seg)
+        clip_t += dur
 
     if not segments:
         raise RuntimeError("no segments rendered")
@@ -1311,34 +1363,50 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
     if fades:
         vf_parts.append(fades)
 
-    if hits:
-        # One pass, three layers in order: the pictures, then the captions, then
-        # the fades — so the text stays on top and still fades with the picture.
-        # This has to be filter_complex rather than -vf, because every picture
-        # is another input.
-        ins = _overlays.prepare_inputs(hits)
-        pre, chain, cur = _overlays.build_filters(hits, first_input=1,
-                                                  hold=OVERLAY_SECONDS,
-                                                  start_label="0:v")
-        segs = list(pre) + list(chain)
+    # ---- a sound on every visible action, built before the final pass so it
+    # rides in the same encode instead of paying for a second one
+    sfx_path = None
+    if SFX_ENABLED and (punch_times or hits):
+        try:
+            sfx_path = _build_sfx(workdir, duration, punch_times, hits)
+            print(f"        sound: {len(punch_times)} on punch-in(s), "
+                  f"{len(hits)} on graphic(s)")
+        except Exception as e:                          # noqa: BLE001
+            print(f"        sound skipped: {type(e).__name__}: {e}")
+
+    if hits or vf_parts or sfx_path:
+        # One pass, in order: the pictures, then the captions, then the fades —
+        # so the text stays on top and still fades with the picture. Pictures
+        # and sound both bring extra inputs, which rules out -vf.
+        ins, segs, cur = [], [], "0:v"
+        if hits:
+            ins += _overlays.prepare_inputs(hits)
+            pre, chain, cur = _overlays.build_filters(hits, first_input=1,
+                                                      hold=OVERLAY_SECONDS,
+                                                      start_label="0:v")
+            segs += list(pre) + list(chain)
         if vf_parts:
             segs.append(f"[{cur}]{','.join(vf_parts)}[vout]")
-            out_lbl = "vout"
+            cur = "vout"
+        if sfx_path:
+            # normalize=0 or amix halves the speech to make room; the effects are
+            # already quiet enough.
+            ins += ["-i", os.path.basename(sfx_path)]
+            segs.append(f"[0:a][{1 + len(hits)}:a]"
+                        f"amix=inputs=2:duration=first:normalize=0[aout]")
+
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", "stitched.mp4", *ins]
+        if segs:
+            cmd += ["-filter_complex", ";".join(segs)]
+        # only bracket the label if the video actually went through a filter
+        cmd += ["-map", f"[{cur}]" if (hits or vf_parts) else "0:v"]
+        if sfx_path:
+            cmd += ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]
         else:
-            out_lbl = cur
-        run(["ffmpeg", "-y", "-loglevel", "error", "-i", "stitched.mp4", *ins,
-             "-filter_complex", ";".join(segs),
-             "-map", f"[{out_lbl}]", "-map", "0:a?",
-             *encoder_args(),
-             "-pix_fmt", "yuv420p", "-c:a", "copy",
-             "-movflags", "+faststart", os.path.basename(final)], cwd=workdir)
-        shutil.move(os.path.join(workdir, os.path.basename(final)), final)
-    elif vf_parts:
-        run(["ffmpeg", "-y", "-loglevel", "error", "-i", "stitched.mp4",
-             "-vf", ",".join(vf_parts),
-             *encoder_args(),
-             "-pix_fmt", "yuv420p", "-c:a", "copy",
-             "-movflags", "+faststart", os.path.basename(final)], cwd=workdir)
+            cmd += ["-map", "0:a?", "-c:a", "copy"]
+        cmd += [*encoder_args(), "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart", os.path.basename(final)]
+        run(cmd, cwd=workdir)
         shutil.move(os.path.join(workdir, os.path.basename(final)), final)
     else:
         shutil.move(os.path.join(workdir, "stitched.mp4"), final)

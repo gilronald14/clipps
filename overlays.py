@@ -29,6 +29,13 @@ import re
 
 import overlay_assets
 
+# The entrance shape comes from the shared easing set. Optional: without it the
+# old hand-rolled ramp is used and the graphic still appears.
+try:
+    import easing as _easing
+except Exception:                                       # noqa: BLE001
+    _easing = None
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 USER_DIR = os.path.join(_HERE, "assets", "overlays")
 KEYWORD_FILE = os.path.join(USER_DIR, "keywords.json")
@@ -171,18 +178,32 @@ def detect(words, min_gap=6.0, limit=6, brands=True, keywords=None,
 
 
 # --------------------------------------------------------------- ffmpeg side
-POP = ("clip(t/{dur},0,1)",)          # progress 0..1 over `dur` seconds
-SHAPE = ("0.62+0.38*({p}*{p}*(3-2*{p}))+0.13*sin(PI*{p})")
+# Fallback shape, used only if easing.py is unavailable. This was the original
+# hand-rolled entrance: a smoothstep with a single sine hump standing in for an
+# overshoot. It peaks at 1.037, which is barely a pop at all -- measured.
+_OLD_SHAPE = "clip(t/{dur},0,1)"
+_OLD_FULL = "0.62+0.38*({p}*{p}*(3-2*{p}))+0.13*sin(PI*{p})"
 
 
-def scale_expr(dur=0.34):
-    """A scale ramp with a slight overshoot, in the input's own timeline."""
-    p = POP[0].format(dur=dur)
-    return SHAPE[0].format(p=p)
+def scale_expr(dur=0.42):
+    """A scale ramp that settles like a spring, in the input's own timeline.
+
+    Uses the damped spring from the Lemo-Opuscar toolkit. A spring is what makes
+    an entrance read as having weight: it overshoots, comes back, and rings
+    down, rather than rising at a constant rate and stopping dead.
+
+    The damping is 0.7, not the source's 0.35, because an entrance runs for a
+    fixed time and then holds: at their damping the spring only reaches 1.0417
+    by t=1, so the graphic would sit 4% oversized for the rest of its life.
+    """
+    if _easing is not None:
+        return _easing.ffmpeg_spring(dur=dur)
+    p = _OLD_SHAPE.format(dur=dur)
+    return _OLD_FULL.format(p=p)
 
 
 def build_filters(hits, target_h=112, x=64, bottom=240,
-                  hold=2.5, pop=0.34, first_input=1, start_label="0:v"):
+                  hold=2.5, pop=0.42, first_input=1, start_label="0:v"):
     """Filter-complex fragments that composite each hit under the captions.
 
     Returns (pre, chain, out_label) where `pre` transforms each extra input and
@@ -197,9 +218,14 @@ def build_filters(hits, target_h=112, x=64, bottom=240,
         # The entrance settles AT the word, so it starts a touch early.
         t0 = max(0.0, float(h["t"]) - pop * 0.45)
         t1 = t0 + hold
+        # The expressions MUST be single-quoted. They contain commas --
+        # `clip(t/0.42,0,1)` -- and ffmpeg's filter parser takes an unquoted
+        # comma as the start of the next filter or option, so it reports
+        # "No option name near ..." and the whole graph fails to build.
+        _sx = scale_expr(pop)
         pre.append(
             f"[{idx}:v]format=rgba,"
-            f"scale=w=iw*({scale_expr(pop)}):h=ih*({scale_expr(pop)}):"
+            f"scale=w='iw*({_sx})':h='ih*({_sx})':"
             f"eval=frame,"
             f"fade=t=in:st=0:d=0.10:alpha=1,"
             f"fade=t=out:st={max(0.0, hold - 0.16):.3f}:d=0.16:alpha=1,"

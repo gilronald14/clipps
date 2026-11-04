@@ -17,6 +17,7 @@
 !.gitattributes
 !LICENSE
 !README.md
+!CREDITS.md
 !requirements.txt
 
 # entry points
@@ -44,6 +45,9 @@
 !svg_raster.py
 !overlay_assets.py
 !overlays.py
+# easing shapes and procedural sound
+!easing.py
+!sfx.py
 # only the user's own trigger list ships; fetched icons and their cache do not
 !assets/
 assets/icons/
@@ -61,6 +65,7 @@ openshorts_ref/
 aiys_ref/
 donkey_ref/
 ihe_ref/
+lemo_ref/
 # the pre-existing attempts, kept locally but not part of this project
 legacy/
 # generated at runtime
