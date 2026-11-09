@@ -92,6 +92,83 @@ def snap_edge(t, spans, pad=0.06, reach=2.5):
     return min(b, max(a, a + pad)) if t < a else max(a, min(b, b - pad))
 
 
+# How far either side of a proposed edge we will look for a sentence boundary.
+# A cut is better left where the ranker put it than dragged somewhere unrelated.
+SENTENCE_REACH_S = 6.0
+
+
+def interpolate_words(segs):
+    """(token, start, end) for every word, from segment-level timings.
+
+    The source transcript carries no per-word times, and using the SEGMENT
+    boundaries as sentence boundaries does not work: measured on the real
+    transcript only 45% of segments end with punctuation, and a sentence
+    routinely ends in the middle of one. Two clips in seven opened on a line
+    like "in the American Time Use Survey", which is plainly mid-thought.
+
+    So distribute each segment's duration across its own words in proportion to
+    character count. That assumes a roughly steady rate inside a segment, which
+    puts a boundary within a few tenths of a second -- close enough, because the
+    silence pass afterwards snaps to the exact sample.
+    """
+    out = []
+    for s in segs:
+        toks = (s.get("text") or "").split()
+        if not toks:
+            continue
+        weights = [len(t) + 1 for t in toks]
+        total = float(sum(weights))
+        t0, t1 = float(s["start"]), float(s["end"])
+        span = max(t1 - t0, 0.0)
+        acc = 0.0
+        for tok, weight in zip(toks, weights):
+            a = t0 + span * acc / total
+            acc += weight
+            out.append((tok, a, t0 + span * acc / total))
+    return out
+
+
+def sentence_edges(t_path):
+    """Times where a sentence begins and where one ends, to the nearest word.
+
+    A sentence ends at the last word carrying . ? !; the sentence after it
+    starts on the next word. Working word by word is what catches the boundaries
+    that fall inside a segment.
+    """
+    with open(t_path, encoding="utf-8") as f:
+        segs = (json.load(f).get("segments") or [])
+    words = interpolate_words(segs)
+    starts, ends = [], []
+    if words:
+        starts.append(words[0][1])
+    for i, (tok, _a, b) in enumerate(words):
+        if re.search(r"[.?!][\"')\]]*$", tok):
+            ends.append(b)
+            if i + 1 < len(words):
+                starts.append(words[i + 1][1])
+    return sorted(starts), sorted(ends)
+
+
+def snap_to_sentence(t, edges, prefer_earlier=True, reach=SENTENCE_REACH_S):
+    """Move `t` to the nearest sentence edge within `reach`, else leave it.
+
+    Ties go earlier for a clip's start (opening slightly wide is recoverable,
+    clipping the hook is not) and later for its end (finish the thought). This
+    is the same asymmetry a human editor applies without thinking about it.
+    """
+    best, best_gap = None, None
+    for e in edges:
+        gap = abs(e - t)
+        if gap > reach:
+            continue
+        if best is None or gap < best_gap:
+            best, best_gap = e, gap
+        elif gap == best_gap and ((prefer_earlier and e < best)
+                                  or (not prefer_earlier and e > best)):
+            best = e
+    return t if best is None else best
+
+
 def slugify(path):
     stem = os.path.splitext(os.path.basename(path))[0]
     s = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_").lower()
@@ -232,17 +309,31 @@ def main():
     # clipped even though the transcript says every word is present. Padding
     # does not rescue it because the error is systematic toward the consonant,
     # not random drift. So find the silence either side and cut in that.
-    log("\n  anchoring cut edges on silence")
+    # Three passes, in this order, because each one is a coarser question than
+    # the next: WHERE in the argument is the clip (sentence), how LONG may it be
+    # (duration), then exactly WHICH sample to cut on (silence).
+    log("\n  anchoring cut edges")
+    sent_starts, sent_ends = sentence_edges(t_path)
+    log(f"    {len(sent_starts)} sentence start(s), {len(sent_ends)} sentence end(s)")
     spans = detect_silences(src)
     log(f"    {len(spans)} silent gap(s) in the source")
-    moved = 0
+
+    moved, snapped = 0, 0
     for x in hi:
         s0, e0 = float(x["start_time"]), float(x["end_time"])
-        s1, e1 = snap_edge(s0, spans), snap_edge(e0, spans)
-        # Snapping must not push a clip outside the requested length range.
-        # Both edges first, then one, then neither -- never a clip that is
-        # the wrong length just because the quietest place was further away.
-        for cs, ce in ((s1, e1), (s1, e0), (s0, e1)):
+        # 1. Sentence snap -- a clip must not open or close mid-thought.
+        ss = snap_to_sentence(s0, sent_starts, prefer_earlier=True)
+        ee = snap_to_sentence(e0, sent_ends, prefer_earlier=False)
+        if abs(ss - s0) > 0.01 or abs(ee - e0) > 0.01:
+            snapped += 1
+        # 2. Silence align -- ASR onsets sit on the consonant, so an edge placed
+        #    on one chops the attack off the first word. Padding cannot rescue
+        #    that, because the error is systematic toward the consonant rather
+        #    than random drift. Cut inside the quiet instead.
+        s1, e1 = snap_edge(ss, spans), snap_edge(ee, spans)
+        # 3. Duration guard -- neither pass may leave a clip the wrong length.
+        #    Widest-to-narrowest, so the most refinement that still fits wins.
+        for cs, ce in ((s1, e1), (s1, ee), (ss, e1), (ss, ee), (s0, e0)):
             if a.min_sec <= (ce - cs) <= a.max_sec:
                 break
         else:
@@ -251,7 +342,8 @@ def main():
             moved += 1
             log(f"    {s0:7.2f}s -> {cs:7.2f}s    {e0:7.2f}s -> {ce:7.2f}s")
         x["start_time"], x["end_time"] = round(cs, 3), round(ce, 3)
-    log(f"    {moved} of {len(hi)} clip boundary pair(s) moved off a word onset")
+    log(f"    {snapped} of {len(hi)} snapped to a sentence edge")
+    log(f"    {moved} of {len(hi)} moved off a word onset onto silence")
     # Written back so the renderer sees the adjusted times, and so a later
     # --reuse is stable: an edge already inside silence snaps to itself.
     with open(h_path, "w", encoding="utf-8") as f:
