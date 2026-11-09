@@ -258,6 +258,19 @@ Turn the sound off with `SHORTSMITH_SFX=0`; adjust it with
 
 ---
 
+## What content this suits
+
+It was built and tuned on a **two-person interview**, and that shows. Podcasts,
+interviews and talking-head video work well. Vlogs and streams mostly do not yet —
+and two of the failure modes are silent, so it is worth reading
+**[CONTENT_TYPES.md](CONTENT_TYPES.md)** before pointing it at something else.
+
+The short version: the moment ranker needs a **transcript**, and with no speech it
+returns zero clips without an error; and the framing needs a **face**, with no
+fallback layout when there isn't one.
+
+---
+
 ## What's inside
 
 | File | Job |
