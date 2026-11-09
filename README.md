@@ -258,6 +258,45 @@ Turn the sound off with `SHORTSMITH_SFX=0`; adjust it with
 
 ---
 
+## How the captions move, and how fast the clip cuts
+
+Two things were added after measuring the output against published short-form
+research. Both are tunable.
+
+**Emphasised words pop.** The karaoke highlight already marks whichever word is
+being spoken. A figure (`30%`, `1,000`) or an absolute (`never`, `everything`,
+`most`) additionally scales up **14% and settles back over 130ms**, starting on
+that word's first frame. Measured through the renderer: **+12.1% at the word's
+first frame**, decaying to 0 — an overshoot-then-settle, which is what makes it
+read as designed rather than as default.
+
+How often that fires is taste, and the rates differ by about 25x, so it is
+selectable with `SHORTSMITH_CAPTION_POP`:
+
+| Mode | Fires on | Measured rate |
+|---|---|---|
+| `key` *(default)* | figures and absolutes | **1.31%** of words — one every ~31s of speech |
+| `all` | every spoken word | ~25x more; the busy word-by-word style |
+| `off` | nothing, colour only | as before |
+
+The opening caption also **eases in from 94% to 100%** so a clip does not start
+on a completely static frame. It is skipped when that first word pops, because
+two scale ramps at once measured at only +9.3% instead of the full 14%.
+
+**Pacing.** The punch-in throttle was set from a long-form guideline
+("≤3 big zooms per minute") which fights the short-form target of a visual change
+every **1–3 seconds**. On three real clips the output sat at **8–9 seconds**
+between changes. Halving the minimum gap and raising the per-segment cap took one
+test clip from **3 punch-ins to 5**, filling a stretch that had been empty for
+14 seconds.
+
+```python
+PUNCH_MIN_GAP = 2.0             # was 3.0
+PUNCH_MAX_PER_SEGMENT = 5       # was 3
+```
+
+---
+
 ## What content this suits
 
 It was built and tuned on a **two-person interview**, and that shows. Podcasts,

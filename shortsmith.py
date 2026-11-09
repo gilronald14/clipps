@@ -32,6 +32,7 @@ Output: 1080x1920 H.264 + AAC, loudness-normalised.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -184,8 +185,20 @@ PUNCH_ENABLED = True
 # on the face at a layout change wants ~1.10; the old 0.075 was under that.
 PUNCH_STRENGTH = 0.10           # peak extra zoom at the middle of the pulse
 PUNCH_SECONDS = 0.55            # pulse length
-PUNCH_MIN_GAP = 3.0             # never two pulses closer than this
-PUNCH_MAX_PER_SEGMENT = 3       # matches the "<=3 big zooms/min" guidance
+# Pacing. These are the two numbers that decide how a clip FEELS, and the old
+# values were set from a long-form guideline ("<=3 big zooms per minute") that
+# fights the short-form target of a visual change every 1-3 seconds.
+#
+# Measured on three real clips before this change: 31s/11 changes (fine), but
+# 36s/4 and 24s/3 -- one change every 8-9 seconds. That is the single biggest
+# measured gap against the retention research, where paced video averages 58%
+# retention against 41% for a static talking head.
+#
+# Halving the gap and raising the cap roughly doubles the frame-level events
+# without turning the clip into a zoom storm. Judgement call, to be eyeballed on
+# real footage -- the honest test is whether a 30s clip feels restless.
+PUNCH_MIN_GAP = 2.0             # never two pulses closer than this
+PUNCH_MAX_PER_SEGMENT = 5       # was 3, from a long-form guideline
 PUNCH_EDGE_MARGIN = 0.8         # keep pulses off the very start/end
 PUNCH_MIN_SEGMENT = 4.0         # a very short segment gets no pulse at all
 
@@ -274,6 +287,75 @@ def _build_sfx(workdir, duration, punch_times, hits):
     return path
 CAPTION_MAX_CPS = 17.0          # characters per second ceiling
 CAPTION_FONT_FILE = "C:/Windows/Fonts/arialbd.ttf"
+
+# ---- emphasis, and the opening line's entrance
+# The karaoke highlight already marks whichever word is being spoken. Popping
+# EVERY word would be busy and amateur; the brief is that the *important* ones
+# stand out, so a pop is reserved for a figure or an absolute.
+#
+# The shape is worth copying: up 8% and back to 100% over 130ms, starting on the
+# word's first frame. Overshoot-then-settle is what separates a caption that
+# reads as designed from one that reads as default. Verified working in this
+# renderer before it was added -- see the note in easing.py.
+# 8% was tried first and measured as visible but slight -- a "the word is alive"
+# pulse rather than an emphasis, which does not really satisfy "make the
+# important words stand out". 14% reads as emphasis and still sits inside the
+# line without shoving its neighbours around.
+CAPTION_POP = r"\fscx114\fscy114\t(0,130,\fscx100\fscy100)"
+# How often a word pops, because this is taste and the rates differ by 25x:
+#   key  - a figure or an absolute only. Measured on a 47-minute interview:
+#          109 pops in 8,342 words = 1.31%, or ONE EVERY ~31 SECONDS of speech.
+#          On a 30s clip that is one pop, which may be too rare to register.
+#   all  - every spoken word, so the pop follows the karaoke highlight. This is
+#          the word-by-word style seen in most short-form, and roughly 25x more
+#          frequent. Busier; some people find it exhausting.
+#   off  - colour only, as it was before.
+# Default `key` because "make the important words stand out" implies not
+# everything, but `all` is one env var away if the restrained one feels invisible.
+CAPTION_POP_MODE = (os.environ.get("SHORTSMITH_CAPTION_POP", "key") or "key").lower()
+# The opening line's entrance is a SCALE ramp and deliberately has no fade.
+# A fade was tried first and it cancelled the pop: `\fad(140,0)` and the 130ms
+# pop start on the same frame, so for the whole of the first caption's
+# entrance an important word's pop is still fading up and cannot be seen.
+# Measured: with the fade the first word showed no size change at all.
+# Without it, both ramps pull toward 100% and read as one settle into place.
+CAPTION_ENTER_SCALE = r"\fscx94\fscy94\t(0,220,\fscx100\fscy100)"
+
+_EMPHASIS_RE = re.compile(
+    r"^[\$€£]?\d[\d,.]*%?$"                                    # a figure: 30%, 4
+    r"|^(billion|million|trillion|thousand|hundred|percent)$"
+    r"|^(never|always|every|everything|everyone|nothing|nobody|"
+    r"most|best|worst|first|last|only|huge|massive|tiny)$",
+    re.I)
+
+
+def _wants_pop(text):
+    """Whether this word earns the emphasis pop.
+
+    Strip punctuation from the ENDS only. The interior set keeps "," and "."
+    because a figure needs them ("1,000.50"), but leaving a sentence's full stop
+    in place means "EVERYONE." never matches "^everyone$" -- which is exactly
+    what happened on real footage: across 118 caption events the only word that
+    popped was "10", because every emphasised word was followed by punctuation.
+    """
+    if CAPTION_POP_MODE == "off":
+        return False
+    if CAPTION_POP_MODE == "all":
+        return True
+    clean = re.sub(r"[^A-Za-z0-9$€£,.%]", "", text.upper()).strip(".,;:!?-'\"")
+    return bool(_EMPHASIS_RE.match(clean))
+
+
+def _word_render(text, spoken=False):
+    """One word of a caption chunk, with its ASS override tags.
+
+    The spoken word is gold. If it is also an important word it pops as well.
+    """
+    up = text.upper()
+    if not spoken:
+        return up
+    pop = CAPTION_POP if _wants_pop(text) else ""
+    return f"{{\\c&H0000D7FF&{pop}}}{up}{{\\c&H00FFFFFF&}}"
 CAPTION_MIN_WORDS_FOR_PUNCT_BREAK = 3   # don't break on a 1-2 word stub
 WHISPER_MODEL = "base"
 WHISPER_LANG = "en"
@@ -1153,11 +1235,20 @@ def build_ass(words, out_path, split_ranges):
 
         for i, w in enumerate(ph):
             hi = " ".join(
-                (f"{{\\c&H0000D7FF&}}{x['text'].upper()}{{\\c&H00FFFFFF&}}" if j == i
-                 else x["text"].upper())
-                for j, x in enumerate(ph))
+                (_word_render(x["text"], spoken=(j == i)) for j, x in enumerate(ph)))
             start, end = edges[i], edges[i + 1]
             prefix = "{\\an5}" if in_split((start + end) / 2) else ""
+            # The opening chunk arrives with motion rather than just appearing.
+            # Note the limit: every word is its own event, so a chunk-level
+            # entrance can only play on the chunk's FIRST word. It reads as the
+            # line arriving, not as each word fading in.
+            #
+            # Skipped when that first word also pops: the two are both scale
+            # ramps, and running them together pulled the pop down to +9.3%
+            # instead of its full 14%. The pop is the better of the two on the
+            # word it applies to, so it wins.
+            if pi == 0 and i == 0 and not _wants_pop(ph[0]["text"]):
+                prefix += f"{{{CAPTION_ENTER_SCALE}}}"
             lines.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,"
                          f"0,0,0,,{prefix}{hi}")
     with open(out_path, "w", encoding="utf-8") as f:
