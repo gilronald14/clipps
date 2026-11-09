@@ -107,9 +107,18 @@ need_models = [
     ("diarization/seg_pyannote3.onnx", "speaker diarization", False),
     ("diarization/embed_en_campplus.onnx", "speaker diarization", False),
 ]
+# A file this small is an error page or a Git-LFS pointer, never a model.
+# opencv_zoo stores yunet.onnx in LFS, so fetching it from the raw host yields a
+# 131-byte text file; checking existence alone reported that as a healthy model
+# and the render then failed on it.
+MIN_PLAUSIBLE = 100 * 1024
 for rel, why, required in need_models:
     p = os.path.join(MODELS, rel)
-    if os.path.exists(p):
+    if os.path.exists(p) and os.path.getsize(p) < MIN_PLAUSIBLE:
+        size = os.path.getsize(p)
+        bad(f"{rel} is {size} bytes ({why}) — not a model, likely a Git-LFS "
+            f"pointer or a truncated download", "python download_models.py")
+    elif os.path.exists(p):
         ok(f"{rel}  ({os.path.getsize(p)/1048576:.1f} MB, {why})")
     elif required:
         bad(f"{rel} missing ({why})", "python download_models.py")

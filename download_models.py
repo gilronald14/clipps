@@ -24,10 +24,16 @@ FILES = [
     ("blaze_face_full_range.tflite",
      f"{MP}/blaze_face_full_range/float16/latest/blaze_face_full_range.tflite",
      None),
+    # opencv_zoo keeps this model in Git LFS, so it must come from the LFS host.
+    # Two wrong ways, both tried and both bad: github.com/<repo>/raw/... 504s
+    # behind some proxies, and raw.githubusercontent.com serves the 131-byte LFS
+    # POINTER rather than the model -- which then fails to parse at render time.
+    # media.githubusercontent.com/media/... is the one that returns the real
+    # 232,589-byte binary.
     ("yunet.onnx",
-     "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/"
-     "face_detection_yunet_2023mar.onnx",
-     None),
+     "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/"
+     "face_detection_yunet/face_detection_yunet_2023mar.onnx",
+     232589),
     ("diarization/seg_pyannote3.onnx",
      "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/"
      "resolve/main/model.onnx",
@@ -49,11 +55,18 @@ def human(n):
 def fetch(dest, url, expect, quiet=False):
     if os.path.exists(dest):
         have = os.path.getsize(dest)
-        if expect is None or have == expect:
+        # An existing file is only "ok" if it is plausible. Accepting any size
+        # when `expect` is None is what let a 131-byte Git-LFS pointer sit in
+        # models/ being reported as a fine model.
+        good = (have == expect) if expect is not None else (have >= MIN_PLAUSIBLE)
+        if good:
             print(f"  ok      {os.path.relpath(dest, _HERE)}  ({human(have)})")
             return True, have
-        print(f"  re-fetch {os.path.relpath(dest, _HERE)}  "
-              f"(have {human(have)}, want {human(expect)})")
+        if have < MIN_PLAUSIBLE:
+            why = f"{human(have)} is not a model"
+        else:
+            why = f"have {human(have)}, want {human(expect)}"
+        print(f"  re-fetch {os.path.relpath(dest, _HERE)}  ({why})")
     else:
         print(f"  get     {os.path.relpath(dest, _HERE)}")
 
@@ -108,7 +121,11 @@ def main():
         if a.check:
             have = os.path.exists(dest)
             size = os.path.getsize(dest) if have else 0
-            good = have and (expect is None or size == expect)
+            # Same rule as fetch(): an unknown-size model still has to be big
+            # enough to plausibly BE a model, or --check reports a truncated
+            # download as present.
+            good = have and (size == expect if expect is not None
+                             else size >= MIN_PLAUSIBLE)
             print(f"  {'ok    ' if good else 'MISSING'} {rel}"
                   + (f"  ({human(size)})" if have else ""))
             if not good:

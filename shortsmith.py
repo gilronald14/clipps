@@ -390,10 +390,20 @@ def _load_detector():
 
     yunet = os.path.join(MODELS, "yunet.onnx")
     if os.path.exists(yunet):
-        _DETECTOR = cv2.FaceDetectorYN.create(yunet, "", (320, 320), 0.6, 0.3, 5000)
-        _DETECTOR_KIND = "yunet"
-        print("  detector: OpenCV YuNet")
-        return
+        try:
+            _DETECTOR = cv2.FaceDetectorYN.create(yunet, "", (320, 320), 0.6, 0.3, 5000)
+            _DETECTOR_KIND = "yunet"
+            print("  detector: OpenCV YuNet")
+            return
+        except Exception as e:                       # noqa: BLE001
+            # Guarded for the same reason the BlazeFace branch above is, and it
+            # is not a theoretical case: opencv_zoo stores this model in Git LFS,
+            # so fetching it from the wrong host yields a ~131-byte pointer file
+            # rather than the model. Checking os.path.exists() alone accepted
+            # that as valid, and because the detector is built lazily this raised
+            # MID-RENDER -- after the user had already waited minutes. Better to
+            # fall back to BlazeFace and say so.
+            print(f"  ! YuNet unusable ({e}) — continuing without it")
 
     raise RuntimeError("No face detector model found in " + MODELS)
 
