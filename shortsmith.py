@@ -1322,7 +1322,10 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
          "-ss", f"{start:.4f}", "-t", f"{duration:.4f}", "-i", SRC,
          "-map", "0:v:0", "-map", "1:a:0?",
          "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-         "-af", "loudnorm=I=-14:TP=-1.0:LRA=7",
+         # TP=-1.0 measured -0.9 dBFS on the rendered clips, which is at
+         # TikTok's ceiling and 0.6 dB above YouTube's. -1.5 is the strictest
+         # platform spec and costs nothing audible.
+         "-af", "loudnorm=I=-14:TP=-1.5:LRA=7",
          "-shortest", "-movflags", "+faststart", "stitched.mp4"], cwd=workdir)
 
     # ---- 5. captions, then head/tail fades (fades last so the text fades too)

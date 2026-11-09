@@ -202,13 +202,28 @@ def scale_expr(dur=0.42):
     return _OLD_FULL.format(p=p)
 
 
-def build_filters(hits, target_h=112, x=64, bottom=240,
+def build_filters(hits, target_h=112, x=100, bottom=340,
                   hold=2.5, pop=0.42, first_input=1, start_label="0:v"):
     """Filter-complex fragments that composite each hit under the captions.
 
     Returns (pre, chain, out_label) where `pre` transforms each extra input and
-    `chain` overlays them one after another. Position is bottom-left, clear of
-    the caption band and clear of the platform's own button column.
+    `chain` overlays them one after another.
+
+    PLACEMENT, and why these numbers. Every platform covers a strip at the
+    bottom of a 1080x1920 frame with its own UI, and the strip is large:
+    measured, 320px on TikTok, 310 on Reels, 300 on Shorts and Facebook. So
+    anything below y=1600 is behind a comment box or a share button.
+
+    These used to be x=64 and bottom=240, which put the graphic's lowest pixel
+    at y=1680 -- 80px into that covered strip, on every clip. It looked right in
+    a still frame and was partly hidden in the app.
+    bottom=340 puts the lowest pixel at y=1580, clear of all four platforms, and
+    x=100 is inside the 900px-wide universal safe zone (which starts at x=90)
+    rather than in the left margin band.
+
+    It stays bottom-left deliberately. The advice for on-screen text is "top 40%
+    of the safe zone", but this is a face crop: the upper half of the frame is
+    the speaker's head, and covering that is worse than a lower-third placement.
     """
     pre, chain = [], []
     cur = start_label
