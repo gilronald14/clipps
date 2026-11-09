@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Offline highlight ranking — no LLM, no API key, no network.
 
-This exists so the pipeline can run fully unattended: the transcript-driven
-ranker in highlights_llm.py needs a model, and on this box the only inference
-credential is the user's Nous Portal token, which expires hourly and is Hermes's
-to refresh. A "drop a video and wait" app cannot depend on that, so this module
-scores candidate windows from signals that are already on disk.
+This exists so the pipeline can run fully unattended. The transcript-driven
+ranker in highlights_llm.py needs an API key, and a "drop a video and wait" app
+cannot assume the person using it has one -- nor should it spend someone else's
+credit to pick clips. So this module scores candidate windows from signals
+already on disk, and it never touches the network.
 
 It ranks by what a human picking clips would notice, in rough order:
   * speech DENSITY      — talking beats dead air
