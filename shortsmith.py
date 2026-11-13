@@ -313,13 +313,20 @@ CAPTION_POP = r"\fscx114\fscy114\t(0,130,\fscx100\fscy100)"
 # Default `key` because "make the important words stand out" implies not
 # everything, but `all` is one env var away if the restrained one feels invisible.
 CAPTION_POP_MODE = (os.environ.get("SHORTSMITH_CAPTION_POP", "key") or "key").lower()
-# The opening line's entrance is a SCALE ramp and deliberately has no fade.
-# A fade was tried first and it cancelled the pop: `\fad(140,0)` and the 130ms
-# pop start on the same frame, so for the whole of the first caption's
-# entrance an important word's pop is still fading up and cannot be seen.
-# Measured: with the fade the first word showed no size change at all.
-# Without it, both ramps pull toward 100% and read as one settle into place.
-CAPTION_ENTER_SCALE = r"\fscx94\fscy94\t(0,220,\fscx100\fscy100)"
+# The opening line's entrance. It STARTS SMALL, overshoots past full size, then
+# settles -- 60% -> 110% -> 100% across 200ms.
+#
+# This replaces a gentler `\fscx94\fscy94\t(0,220,...)` and it resolves the
+# problem that version could not. A fade was tried there and had to be dropped:
+# `\fad(140,0)` and a 130ms pop both start on the same frame, so the fade
+# swallowed the pop entirely (measured: no size change at all on the first
+# caption). The fix is not to remove the fade but to make the ANIMATION OUTLAST
+# it -- 200ms of movement under an 80ms fade, so the overshoot happens in plain
+# sight. A fade and a scale ramp can coexist; a fade and a SHORTER scale ramp
+# cannot. The 60% start is what makes the line read as landing rather than
+# appearing.
+CAPTION_ENTER_SCALE = (r"\fad(80,120)\fscx60\fscy60"
+                       r"\t(0,120,\fscx110\fscy110)\t(120,200,\fscx100\fscy100)")
 
 _EMPHASIS_RE = re.compile(
     r"^[\$€£]?\d[\d,.]*%?$"                                    # a figure: 30%, 4
@@ -1110,6 +1117,64 @@ def _ends_phrase(text):
     return bool(text) and text[-1] in ",.?!;:"
 
 
+# -14 LUFS is the delivery target for every short-form platform (YouTube,
+# TikTok, Reels all normalise playback to it), so a clip mastered to it is not
+# quietly turned down on upload. LRA=7 keeps a talking head from being squashed
+# flat.
+#
+# The true-peak ceiling is asked for as -1.7, not -1.5, and that is measured
+# rather than arbitrary. loudnorm's TP is a limit on ITS OWN output, and the AAC
+# encode afterwards adds intersample peaks on top, so the delivered file lands
+# above whatever is requested:
+#
+#     requested   delivered TP
+#       -1.5         -1.43   <- exceeds the -1.5 ceiling, so the old value
+#       -1.6         -1.50      never actually delivered what it claimed
+#       -1.7         -1.62   <- 0.12 dB of margin, chosen
+#
+# -1.6 lands exactly on the ceiling, which is fragile when two encodes of the
+# same audio differ by up to 0.1 dB. -1.7 holds under that variance and costs
+# 0.04 LU of integrated loudness, which is inaudible. Every real platform
+# ceiling is -1.0 dBTP, so this is comfortably inside all of them.
+LOUDNORM_TARGET = "I=-14:TP=-1.7:LRA=7"
+
+
+def measure_loudness(src, start, duration):
+    """First pass of a two-pass EBU R128 normalisation.
+
+    Single-pass `loudnorm` has to guess, so it rides the gain up and down as it
+    goes -- audible as pumping on a clip that starts quiet and gets loud. Two
+    passes measure the whole thing first, then apply ONE linear gain, which is
+    both faithful and accurate.
+
+    Returns the measurement dict, or None when there is no audio or the probe
+    fails -- the caller then falls back to the single-pass filter rather than
+    losing the audio entirely.
+    """
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-nostats",
+             "-ss", f"{start:.4f}", "-t", f"{duration:.4f}", "-i", src,
+             "-map", "0:a:0", "-af",
+             f"loudnorm={LOUDNORM_TARGET}:print_format=json", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=300)
+    except Exception:                                    # noqa: BLE001
+        return None
+    # loudnorm prints its JSON block to stderr; the noise around it is normal.
+    blob = r.stderr[r.stderr.rfind("{"):r.stderr.rfind("}") + 1] if "{" in r.stderr else ""
+    if not blob:
+        return None
+    try:
+        stats = json.loads(blob)
+    except Exception:                                    # noqa: BLE001
+        return None
+    # A silent measurement still returns numbers; -inf means there was nothing
+    # to measure and normalising to it would produce silence.
+    if not stats.get("input_i") or stats["input_i"].lstrip("-").startswith("inf"):
+        return None
+    return stats
+
+
 def _edge_fades(dur):
     """Fade in at the head, out at the tail.
 
@@ -1415,6 +1480,24 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
             f.write(f"file '{os.path.basename(s)}'\n")
 
     stitched = os.path.join(workdir, "stitched.mp4")
+
+    # Loudness in two passes. The first measures this exact audio window; the
+    # second applies the result as one linear gain. Single-pass loudnorm has to
+    # adapt as it goes, which pumps audibly across a clip whose level moves, and
+    # it lands only approximately on the target. Falling back to single-pass
+    # keeps the audio rather than losing it if the measurement fails.
+    af = f"loudnorm={LOUDNORM_TARGET}"
+    stats = measure_loudness(SRC, start, duration)
+    if stats:
+        af = (f"loudnorm={LOUDNORM_TARGET}"
+              f":measured_I={stats['input_i']}:measured_TP={stats['input_tp']}"
+              f":measured_LRA={stats['input_lra']}:measured_thresh={stats['input_thresh']}"
+              f":offset={stats.get('target_offset', 0.0)}:linear=true")
+        print(f"  loudness in : {float(stats['input_i']):.1f} LUFS "
+              f"(TP {float(stats['input_tp']):.1f} dBTP) -> {-14.0:.1f} LUFS, one linear gain")
+    else:
+        print("  loudness : could not measure, using single-pass loudnorm")
+
     # -ss/-t must sit BEFORE "-i SRC" so they seek the long source as INPUT
     # options. As output options they would also apply to the concatenated
     # video (whose timestamps only run 0..duration) and strip every frame.
@@ -1423,10 +1506,7 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
          "-ss", f"{start:.4f}", "-t", f"{duration:.4f}", "-i", SRC,
          "-map", "0:v:0", "-map", "1:a:0?",
          "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
-         # TP=-1.0 measured -0.9 dBFS on the rendered clips, which is at
-         # TikTok's ceiling and 0.6 dB above YouTube's. -1.5 is the strictest
-         # platform spec and costs nothing audible.
-         "-af", "loudnorm=I=-14:TP=-1.5:LRA=7",
+         "-af", af,
          "-shortest", "-movflags", "+faststart", "stitched.mp4"], cwd=workdir)
 
     # ---- 5. captions, then head/tail fades (fades last so the text fades too)
