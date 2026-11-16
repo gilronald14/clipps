@@ -1139,6 +1139,19 @@ def _ends_phrase(text):
 LOUDNORM_TARGET = "I=-14:TP=-1.7:LRA=7"
 
 
+# Two traps in ffmpeg's silencedetect, both of which produce a SILENT failure --
+# an empty result that looks like "there is no silence":
+#
+#   1. The noise value MUST carry its `dB` suffix. `noise=-35` is accepted without
+#      complaint and matches nothing; `noise=-35dB` works. Measured: the bare form
+#      reported 0 spans where the suffixed form found 9.
+#   2. It logs at INFO level, so a caller running ffmpeg with `-v error` receives
+#      no silence lines at all. That mistake produced a confident and completely
+#      wrong "0.0s of silence across all seven clips" reading during development.
+#
+# Both are worth knowing before anyone re-attempts dead-air removal.
+
+
 def measure_loudness(src, start, duration):
     """First pass of a two-pass EBU R128 normalisation.
 
@@ -1508,6 +1521,27 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
          "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
          "-af", af,
          "-shortest", "-movflags", "+faststart", "stitched.mp4"], cwd=workdir)
+
+    # ---- a note on dead-air removal (auto-editor's method), and why it is absent
+    #
+    # auto-editor (Unlicense) removes silence from the middle of a clip, keeping
+    # a margin either side so the edit still breathes. It was implemented here
+    # and then taken back out, because measurements said it does not pay:
+    #
+    #   * the pauses are short. On the real clips silencedetect finds 3 spans of
+    #     0.71-0.91s at -35dB; there is nothing resembling a long pause, because
+    #     a highlight window is chosen for dense speech by construction.
+    #   * so the honest ceiling is a few percent. Aggressive margins (0.30s span,
+    #     0.08s margin) remove 6.4% of one clip; conservative ones remove nothing.
+    #   * and ffmpeg's `select` cannot stream-copy. Tightening a finished clip
+    #     means re-encoding the whole video, so the price is a generation of
+    #     compression to buy back ~5% of runtime. That is a bad trade, and it
+    #     would also silently break the crop: the face tracking is already baked
+    #     into the segments, so dropping frames would desync it.
+    #
+    # Where it WOULD pay is a rambling source or a fixed-length window padded
+    # with dead air. If that ever comes up, tighten at the SEGMENT render (one
+    # encode, no extra generation) rather than over the finished file.
 
     # ---- 5. captions, then head/tail fades (fades last so the text fades too)
     vf_parts = []
