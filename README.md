@@ -1,10 +1,28 @@
+# Clipps editing workspace update
+
+Run `python webapp.py`, then open **http://127.0.0.1:8765/editor**.
+The original automatic generator remains at `/` and the existing Windows launcher still works.
+
+The new manual workspace requires Python 3.9+ and native FFmpeg/ffprobe on PATH.
+It does not require AI libraries, models, credentials, or a GPU. FFmpeg needs
+libx264 for MP4 and libass for burned captions. For optional local transcription
+and suggestions, install the existing requirements and download the Whisper model
+on a networked machine before offline use. Model loading may download weights.
+
+New workflow: import a local path or upload → optionally transcribe/suggest →
+review clips → edit ordered trims and captions → preview → export selected/all.
+See [WORKSPACE.md](WORKSPACE.md) for setup, data format, limitations and checks,
+and [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) for this update's evidence.
+
+---
+
 # Shortsmith — turn a long video into vertical shorts
 
 Point it at any video and it picks the strong moments, crops them to 1080×1920
 following whoever is on screen, adds an eased push plus emphasis punch-ins, and
 burns word-timed captions.
 
-Everything runs on this PC. No upload, no account, no API key.
+Default processing runs locally. Optional LLM ranking sends transcript text to the configured provider and requires an API key.
 
 ---
 
@@ -51,8 +69,7 @@ burned captions.
 Each video gets its own subfolder under `--out`, so clips from different videos
 never mix.
 
-> A local **web UI** is planned, which will drive this same engine from a
-> browser. Nothing about the pipeline changes; only the front end does.
+> The local web UI and editing workspace are available through `webapp.py`.
 
 ---
 

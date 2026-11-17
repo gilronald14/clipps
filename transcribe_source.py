@@ -89,11 +89,15 @@ def transcribe(source, out_path, model="base", language="en", log=print,
     when the same model produced it, so switching to a bigger model does not
     silently keep the older, less accurate text.
     """
+    from workspace import identity, atomic
+    source_identity = identity(source)
     if reuse and os.path.exists(out_path):
         try:
             with open(out_path, encoding="utf-8") as f:
                 old = json.load(f)
-            if old.get("segments") and old.get("model") == model:
+            if (old.get("segments") and old.get("model") == model
+                    and old.get("source_identity") == source_identity
+                    and old.get("requested_language") == language):
                 log(f"  transcript cached: {len(old['segments'])} segments, "
                     f"model '{old.get('model')}'")
                 return False
@@ -123,7 +127,7 @@ def transcribe(source, out_path, model="base", language="en", log=print,
         log(f"  {device} is not usable here ({type(e).__name__}) — using the CPU")
         device, compute = "cpu", "int8"
         m = WhisperModel(model, device=device, compute_type=compute)
-    segs, _ = m.transcribe(audio, language=language, word_timestamps=False,
+    segs, info = m.transcribe(audio, language=language, word_timestamps=False,
                            vad_filter=True, beam_size=1)
     out_segments = []
     for s in segs:
@@ -137,12 +141,13 @@ def transcribe(source, out_path, model="base", language="en", log=print,
             log(f"    {len(out_segments)} segments, {s.end:.0f}s/{dur:.0f}s "
                 f"({s.end/el:.1f}x realtime)")
 
-    data = {"duration": dur, "model": model, "segments": out_segments}
+    data = {"duration": dur, "model": model, "segments": out_segments,
+            "source_identity": source_identity, "requested_language": language,
+            "language": info.language, "provider": "faster-whisper", "timing": "segment"}
     parent = os.path.dirname(os.path.abspath(out_path))
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(data, f)
+    atomic(out_path, data)
     log(f"  transcribed {len(out_segments)} segments in {time.time()-t0:.0f}s")
     return True
 

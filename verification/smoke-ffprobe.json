@@ -1,0 +1,13 @@
+{
+  "path": "/tmp/tmpq7alzwqa/aa502904214d417fb9b7e5bcc056e6b8/805bc0ba45aa4d66b098a23cf79520fc/01_New_clip.mp4",
+  "size": 356760,
+  "mtime_ns": 1794879896782744079,
+  "duration": 2.033008,
+  "width": 720,
+  "height": 720,
+  "fps": 30.0,
+  "rotation": 0,
+  "audio": true,
+  "codec": "h264",
+  "timing": "source seconds; export CFR 30 fps"
+}

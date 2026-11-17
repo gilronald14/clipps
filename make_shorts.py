@@ -20,6 +20,7 @@ overwrite each other's transcript, highlights or output.
 """
 import argparse
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -248,7 +249,10 @@ def main():
     if not os.path.exists(src):
         raise SystemExit(f"input not found: {src}")
 
-    slug = slugify(src)
+    # Include file identity: same-named sources and replaced recordings must not share cached analysis.
+    stat = os.stat(src)
+    token = hashlib.sha256(f'{src}|{stat.st_size}|{stat.st_mtime_ns}'.encode()).hexdigest()[:12]
+    slug = slugify(src) + '_' + token
     work = os.path.join(a.work, slug)
     out = os.path.join(a.out, slug)
     os.makedirs(work, exist_ok=True)

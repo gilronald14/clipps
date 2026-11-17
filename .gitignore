@@ -74,3 +74,20 @@ python_path.txt
 __pycache__/
 # machine-specific settings (source video path etc.) - never ship these
 local_config.json
+
+# Local editing workspace data and exports
+projects/
+uploads/
+.env
+
+# Persistent editing workspace source and verification
+!workspace.py
+!editor.html
+!WORKSPACE.md
+!IMPLEMENTATION_REPORT.md
+!.env.example
+!tests/
+!verification/
+verification/*
+!verification/smoke-edited.mp4
+!verification/smoke-ffprobe.json

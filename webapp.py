@@ -22,6 +22,9 @@ Security: binds to 127.0.0.1 only. The browse API exposes this machine's
 filesystem, so it must not be reachable from the network.
 """
 import json
+import math
+import uuid
+import workspace
 import os
 import re
 import subprocess
@@ -54,6 +57,8 @@ class Job:
     def log(self, line):
         with self.lock:
             self.lines.append(line)
+            if len(self.lines) > 20000:
+                del self.lines[:1000]
 
     def set(self, **kw):
         with self.lock:
@@ -159,9 +164,19 @@ def _pump(proc, job):
 
 
 def start_job(opts):
+    try:
+        count = int(opts.get('clips', 7))
+        low = workspace.number(opts.get('min_sec', 20), .1, 3600)
+        high = workspace.number(opts.get('max_sec', 45), low, 3600)
+        if not 1 <= count <= 100:
+            raise ValueError('Choose 1–100 clips')
+    except (ValueError, TypeError, AttributeError) as e:
+        return {'error': str(e)}
     with JOB.lock:
-        if JOB.state == "running":
+        if JOB.state == "running" or (JOB.proc and JOB.proc.poll() is None):
             return {"error": "a render is already running"}
+        if workspace.ACTIVE:
+            return {"error": "An editing workspace job is running"}
         JOB.lines.clear()
         JOB.clips = []
         JOB.state = "running"
@@ -197,9 +212,15 @@ def start_job(opts):
     JOB.set(out_dir=out)
     JOB.log(" ".join(f'"{c}"' if " " in c else c for c in cmd))
     JOB.log("")
-    proc = subprocess.Popen(cmd, cwd=_HERE, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True,
-                            encoding="utf-8", errors="replace", bufsize=1)
+    try:
+        workspace.probe(src)
+        proc = subprocess.Popen(cmd, cwd=_HERE, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True,
+                                encoding="utf-8", errors="replace", bufsize=1,
+                                start_new_session=os.name != 'nt')
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        JOB.set(state='failed')
+        return {'error': str(e)}
     JOB.set(proc=proc)
     threading.Thread(target=_pump, args=(proc, JOB), daemon=True).start()
     return {"ok": True}
@@ -213,16 +234,7 @@ def stop_job():
         JOB.state = "stopped"
         JOB.lines.append("")
         JOB.lines.append("Stopping — closing the render and anything it started…")
-    # Kill the tree: make_shorts.py spawns an ffmpeg per stage, and killing
-    # only the parent leaves encoders running with nobody to report to.
-    try:
-        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                       capture_output=True, check=False)
-    except OSError:
-        try:
-            proc.terminate()
-        except OSError:
-            pass
+    workspace.kill(proc)
     return {"ok": True}
 
 
@@ -255,15 +267,30 @@ class Handler(BaseHTTPRequestHandler):
     def _json_body(self):
         try:
             n = int(self.headers.get("Content-Length") or 0)
+            if not 0 <= n <= 16 * 1024 * 1024:
+                raise ValueError("Request too large")
             return json.loads(self.rfile.read(n) or b"{}")
         except (ValueError, TypeError):
             return {}
 
+    def _local_request(self):
+        host = urllib.parse.urlparse('http://' + self.headers.get('Host', '')).hostname
+        origin = self.headers.get('Origin')
+        if host not in ('127.0.0.1', 'localhost', '::1') or (origin and origin not in
+                (f'http://127.0.0.1:{PORT}', f'http://localhost:{PORT}')):
+            self._send(403, {'error': 'Only same-origin local requests are allowed'})
+            return False
+        return True
+
     # -- GET
     def do_GET(self):
+        if not self._local_request():
+            return
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
         path = u.path
+        if workspace.api(self, "GET", path, q):
+            return
 
         if path in ("/", "/index.html"):
             try:
@@ -295,8 +322,13 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- POST
     def do_POST(self):
+        if not self._local_request():
+            return
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
+
+        if workspace.api(self, "POST", u.path, q):
+            return
 
         if u.path == "/api/start":
             self._send(200, start_job(self._json_body()))
@@ -335,28 +367,38 @@ class Handler(BaseHTTPRequestHandler):
         name = os.path.basename((q.get("name") or ["video.mp4"])[0])
         safe = re.sub(r"[^\w.\-]", "_", name) or "video.mp4"
         os.makedirs(UPLOAD_DIR, exist_ok=True)
-        dest = os.path.join(UPLOAD_DIR, safe)
+        dest = os.path.join(UPLOAD_DIR, uuid.uuid4().hex + '_' + safe)
+        temp = dest + '.upload'
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             n = 0
-        if not n:
-            self._send(400, {"error": "empty upload"})
+        if not 0 < n <= 20 * 1024 ** 3:
+            self._send(400, {"error": "Upload must be between 1 byte and 20 GiB. Use a local path for larger media."})
+            self.close_connection = True
             return
         got = 0
         try:
-            with open(dest, "wb") as f:
+            self.connection.settimeout(120)
+            with open(temp, "xb") as f:
                 while got < n:
                     chunk = self.rfile.read(min(1024 * 1024, n - got))
                     if not chunk:
-                        break
+                        raise ValueError('Upload interrupted; partial file removed')
                     f.write(chunk)
                     got += len(chunk)
-        except OSError as e:
-            self._send(500, {"error": f"could not save the upload: {e}"})
+            metadata = workspace.probe(temp)
+            os.replace(temp, dest)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+            if os.path.exists(temp):
+                os.unlink(temp)
+            self._send(400, {"error": str(e)})
+            self.close_connection = True
             return
+        finally:
+            self.connection.settimeout(None)
         JOB.log(f"uploaded {safe} ({human(got)})")
-        self._send(200, {"ok": True, "path": dest, "size": got})
+        self._send(200, {"ok": True, "path": dest, "size": got, "metadata": metadata})
 
     # -- server-sent events: one line per tick, no websocket needed
     def _stream(self):
@@ -398,14 +440,25 @@ class Handler(BaseHTTPRequestHandler):
         size = os.path.getsize(path)
         start, end = 0, size - 1
         rng = self.headers.get("Range")
-        m = re.match(r"bytes=(\d*)-(\d*)", rng or "")
-        if m:
-            if m.group(1):
-                start = int(m.group(1))
-            if m.group(2):
-                end = int(m.group(2))
-            start = max(0, min(start, size - 1))
-            end = max(start, min(end, size - 1))
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", rng or "")
+        if rng:
+            try:
+                if not m or not size or not any(m.groups()):
+                    raise ValueError()
+                a, b = m.groups()
+                if not a:
+                    suffix = int(b)
+                    if suffix <= 0:
+                        raise ValueError()
+                    start = max(0, size - suffix)
+                else:
+                    start = int(a)
+                    end = min(int(b), size - 1) if b else size - 1
+                    if start >= size or end < start:
+                        raise ValueError()
+            except ValueError:
+                self._send(416, b'', extra={'Content-Range': f'bytes */{size}'})
+                return
         length = end - start + 1
         ctype = "video/mp4" if path.lower().endswith((".mp4", ".m4v")) else \
                 "application/octet-stream"
@@ -431,6 +484,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    workspace.recover()
+    import atexit
+    atexit.register(workspace.shutdown)
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}/"
     print("=" * 66)
@@ -450,6 +506,7 @@ def main():
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
+        workspace.shutdown()
         print("\n  stopped.")
         if JOB.proc and JOB.proc.poll() is None:
             stop_job()
