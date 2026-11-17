@@ -443,8 +443,46 @@ def _detect_small(small_bgr):
     return out
 
 
-def detect_face_candidates(frame):
-    """All faces in ORIGINAL frame coordinates (detection runs downscaled)."""
+def _detect_at(frame, region, scale):
+    """Detect inside `region` (a slice of the full frame) and map back to it."""
+    x0, y0 = region
+    crop = frame[y0:, x0:]
+    if crop.size == 0:
+        return []
+    crop_h, crop_w = crop.shape[:2]
+    k = DETECT_MAX_WIDTH / float(crop_w)
+    up = cv2.resize(crop, (int(DETECT_MAX_WIDTH), max(2, int(crop_h * k))),
+                    interpolation=cv2.INTER_CUBIC)
+    out = []
+    for c in _detect_small(up):
+        bx, by, bw, bh = c["box"]
+        # Map the detected box back to original-frame coords
+        out.append({"box": [int(bx / k) + x0, int(by / k) + y0,
+                            int(bw / k), int(bh / k)],
+                    "score": c["score"]})
+    return out
+
+
+def detect_face_candidates(frame, zoom_fallback=True):
+    """All faces in ORIGINAL frame coordinates (detection runs downscaled).
+
+    When the full-frame pass finds NOTHING, it retries on upscaled corner
+    regions. That is what makes a small inset work.
+
+    Measured on a synthetic "gameplay + corner webcam" layout: a face at 13% of
+    frame width is found by the full pass, but at 9% it is 76px in the source --
+    only 57px once the 854px frame is downscaled to the 640px analysis width --
+    and the full pass returns nothing at all. The zoomed pass finds it at 9%,
+    at 6% and even at 4%.
+
+    Note this is NOT the MIN_FACE_WIDTH constant, which is only ever consulted
+    by the two-shot stacker. The docs here blamed that threshold for a corner
+    webcam being ignored; the real cause is the analysis downscale, and no
+    change to a size constant would have fixed it.
+
+    The retry only runs when the full pass came back empty, so it costs nothing
+    on ordinary footage where a face is already found.
+    """
     h, w = frame.shape[:2]
     if w <= DETECT_MAX_WIDTH:
         small, scale = frame, 1.0
@@ -458,7 +496,45 @@ def detect_face_candidates(frame):
         cands.append({"box": [int(x * scale), int(y * scale),
                               int(cw * scale), int(ch * scale)],
                       "score": c["score"]})
-    cands.sort(key=lambda c: c["box"][2] * c["box"][3], reverse=True)
+
+    if not cands and zoom_fallback and w > DETECT_MAX_WIDTH:
+        # No full-frame faces found. Scan several overlapping regions from
+        # the edges where a corner-webcam inset would sit, and retry on the
+        # upscaled version of that region. 20% steps give coverage with
+        # overlap; 10% steps give finer coverage at more cost.
+        found = False
+        for step in (int(w * 0.20), int(w * 0.10)):
+            # Don't miss a face that sits on a cell boundary; the stride + step
+            # doesn't have to partition the frame exactly.
+            for y0 in range(0, max(1, h - step), step):
+                for x0 in range(0, max(1, w - step), step):
+                    # Extend each cell to a generous region so a face isn't
+                    # split across the cell border.
+                    r = step + int(w * 0.15)
+                    rx0, rx1 = max(0, x0 - int(w * 0.05)), min(w, x0 + r)
+                    ry0, ry1 = max(0, y0 - int(h * 0.05)), min(h, y0 + r)
+                    # Detect on the full-res crop of that region, then scale up
+                    sub = frame[ry0:ry1, rx0:rx1]
+                    upscaled = cv2.resize(sub, (DETECT_MAX_WIDTH,
+                        max(2, int(sub.shape[0] * DETECT_MAX_WIDTH / sub.shape[1]))),
+                        interpolation=cv2.INTER_CUBIC)
+                    for c in _detect_small(upscaled):
+                        bx, by, bw, bh = c["box"]
+                        # Map back to original frame
+                        ox = int(bx / (DETECT_MAX_WIDTH / sub.shape[1])) + rx0
+                        oy = int(by / (DETECT_MAX_WIDTH / sub.shape[0])) + ry0
+                        ow = int(bw / (DETECT_MAX_WIDTH / sub.shape[1]))
+                        oh = int(bh / (DETECT_MAX_WIDTH / sub.shape[0]))
+                        # Must overlap the region we sent it from
+                        if ox + ow > rx0 and oy + ry1 > ry0:
+                            found = True
+                            cands.append({"box": [ox, oy, ow, oh],
+                                        "score": c["score"]})
+            if found:
+                break
+            if step == int(w * 0.10):
+                break
+        cands.sort(key=lambda c: c["box"][2] * c["box"][3], reverse=True)
     return cands
 
 
