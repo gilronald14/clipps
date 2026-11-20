@@ -11,6 +11,11 @@ import workspace as w
 
 
 class OfflineTests(unittest.TestCase):
+    def test_interview_keeps_question_with_answer(self):
+        cues = [dict(start=5,end=7,text='What changed?'),dict(start=8,end=14,text='We replaced the sensor.')]
+        hit = offline_scan.rank({'duration':30}, {'audio':[], 'motion':[]}, cues,1,8,18,'interview')[0]
+        self.assertEqual((hit['start'],hit['end']),(5,14))
+
     def test_bounded_motion_keeps_setup_and_recovery(self):
         motion = [0]*12 + [1]+[.25]*7+[1]+[0]*9
         hits = offline_scan.rank({'duration':30}, {'audio':[],'motion':motion}, [], 2, 7, 12, 'gameplay')
@@ -60,9 +65,14 @@ class OfflineTests(unittest.TestCase):
             subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','sine=duration=2',str(media)],check=True)
             p = w.create(media)
             self.assertFalse(p['source']['video'])
+            preview = self.wait(p,w.start(p['id'],'proxy'))
+            self.assertEqual(w.probe(preview['proxy'])['width'],360)
+            p['clips'][0].update(normalize=True,resolution='1080p')
+            p = w.save(p['id'],p)
             result = self.wait(p,w.start(p['id'],'export',[p['clips'][0]['id']]))
             output = w.probe(result['jobs'][-1]['files'][0])
             self.assertTrue(output['audio'] and output['video'])
+            self.assertEqual((output['width'], output['height']),(1080,1920))
             self.assertAlmostEqual(output['duration'],2,delta=.2)
 
     def test_legacy_project_migration(self):

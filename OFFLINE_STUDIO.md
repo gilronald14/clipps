@@ -17,16 +17,29 @@ python -m venv .venv
 Open http://127.0.0.1:8765/editor. The launcher opens this page too.
 The original automatic renderer is available at the root URL.
 
+The model-free workflow also runs unattended from PowerShell:
+
+```powershell
+python make_shorts.py "D:\Videos\stream.mp4" --pure-offline --profile gameplay --clips 3 --min 20 --max 60 --out "D:\Videos\Clips"
+```
+
+It creates an editable project and copies validated clips and sidecars into a
+unique folder under the requested output directory.
+
 1. Import a local media path or drop a file. A native path avoids a second copy.
 2. Choose **Pure offline** for model-free analysis. For an interview you can
    append source-timed SRT or WebVTT captions or use **Offline smart**. The
    latter transcribes audio locally if the project has no captions.
 3. Choose a profile, count and length range. Gameplay favors visual change.
-   Interview and podcast favor available speech evidence. Auto uses balanced
-   weights. Click **Find highlights**. A flat silent source can yield zero.
+   Interview and podcast favor available speech evidence. Auto uses podcast
+   weights for audio-only sources, gameplay weights for silent video without
+   captions, and balanced weights for other inputs. Click **Find highlights**.
+   A flat silent source can yield zero.
 4. Review the suggestions, their evidence, and the seconds before and after each
    cut. Adjust the ordered segments, correct the transcript, and choose fit to
-   preserve screen content or fill to crop. Scan again after editing. Repeated
+   preserve screen content or fill to crop. Blur fills empty space behind the
+   full frame. Safe-area guides are preview-only. If native playback is slow
+   or unsupported, build a lightweight preview. Scan again after editing. Repeated
    suggestions retain the original edited clip in the project.
 5. Choose square, vertical or landscape and 720p or 1080p. Export one or all.
    Vertical H.264/AAC MP4 is the shared delivery format for Shorts, TikTok
@@ -68,7 +81,7 @@ are rejected. Existing manual clips, edits, and job history survive migration.
 
 The exporter renders from the original media. Audio-only input becomes a
 waveform composition. Optional loudness processing runs on the assembled
-program. Duration, stream presence, dimensions and full decode are checked
+program with a loudness measurement before the final encode. Duration, stream presence, dimensions and full decode are checked
 before publishing the MP4. Older clip settings default to 720p.
 Transcription processes 120-second PCM blocks and stores word offsets.
 The legacy camera renderer can use these words instead of transcribing each
@@ -80,11 +93,11 @@ The legacy opt-in external ranker remains separate.
 | Capability | Evidence and status |
 |---|---|
 | Model-free highlights and saved edits | Tested with actual generated silent moving video and a repeat scan after a manual edit. |
-| Audio-only import and export | Tested with a WAV input, vertical waveform video, retained audio, duration check and full decode. |
+| Audio-only import and export | Tested with a WAV input, lightweight preview, normalized 1080×1920 waveform export, retained audio, duration check and full decode. |
 | Migration, caption trims and job recovery | Regression tests cover old projects, corrected captions, reordered segments, cancellation and recovery. |
-| Shorts controls, subtitle import, 1080p UI | Implemented. JavaScript syntax checked. Full browser journey remains unverified. |
+| Shorts controls, subtitle import, resolution settings | Implemented. JavaScript syntax checked. The 1080p encode passed. Full browser journey remains unverified. |
 | Offline smart and legacy camera renderer | Source integrated. Actual inference, GPU fallback and speaker framing need cached models and real recordings. |
-| Professional editing | Partial. Workspace supports fit/fill, ordered cuts, burned captions and whole-program loudness processing. Tracked layouts and effects still live in the legacy renderer. |
+| Professional editing | Partial. Workspace supports full frame, blurred background, crop, ordered cuts, burned captions and whole-program loudness processing. Tracked layouts and effects still live in the legacy renderer. |
 | Long-source performance | PCM and sampled video stream in bounded blocks. No multi-hour benchmark or proxy playback benchmark yet. |
 | Release evaluation | No verified optional dependency lock, full clean-install test or human-rated interview, tutorial or gameplay benchmark. |
 
@@ -100,6 +113,12 @@ speaker comprehension require evaluation on representative recordings.
 
 Run `python -m unittest discover -s tests` with FFmpeg on PATH. The HTTP range
 test requires permission to connect to a local listening socket.
+
+On this Windows run, 19 of 20 tests passed in 7.995 seconds. The remaining
+test could not connect to its loopback HTTP server (WinError 10013). The
+baseline at 131519d had the same restriction, with 12 of 13 passing when
+Python used UTF-8. The new CLI was also exercised against the silent event
+fixture and produced an editable project and a fully decoded MP4 with sidecars.
 
 Editorial references: [YouTube creator discussion](https://blog.youtube/creator-and-artist-stories/youtube-shorts-deep-dive/),
 [TikTok Creative Codes](https://ads.tiktok.com/business/en/creative-codes).

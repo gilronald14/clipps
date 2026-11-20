@@ -40,7 +40,7 @@ def measure(source):
             samples = array('h', block)
             rms = math.sqrt(sum(v*v for v in samples) / len(samples)) / 32768
             baseline = sum(history) / len(history) if history else rms
-            audio.append(min(1., rms + max(0., rms-baseline) / max(.035, baseline)))
+            audio.append(min(1., max(0., rms-baseline) / max(.035, baseline)))
             history.append(rms)
     if source.get('video', True):
         previous = None
@@ -61,7 +61,13 @@ def rank(source, signals, cues, count, minimum, maximum, profile):
     length = min(duration, maximum, max(minimum, (minimum + maximum)/2))
     cues = sorted(cues, key=lambda c: c['start'])
     starts = [c['start'] for c in cues]
-    weights = PROFILES[profile]
+    applied = profile
+    if profile == 'auto':
+        if not source.get('video', True):
+            applied = 'podcast'
+        elif not source.get('audio', True) and not cues:
+            applied = 'gameplay'
+    weights = PROFILES[applied]
     peaks = []
     for second in range(math.ceil(duration)):
         audio, motion = (signals[k][second] if second < len(signals[k]) else 0
@@ -75,6 +81,8 @@ def rank(source, signals, cues, count, minimum, maximum, profile):
             peaks.append((score, second, audio, motion, speech))
     selected = []
     for score, second, audio, motion, speech in sorted(peaks, key=lambda p: -p[0]):
+        if any(h['start'] <= second < h['end'] for h in selected):
+            continue
         start = min(max(0, second-length*.55), duration-length)
         end = start + length
         # Include the action following a scene change if the surrounding frames
@@ -96,12 +104,32 @@ def rank(source, signals, cues, count, minimum, maximum, profile):
         i = bisect_left(starts, end)
         if i and minimum <= cues[i-1]['end']-start <= maximum and abs(cues[i-1]['end']-end)<=3:
             end = min(duration, cues[i-1]['end'])
+        # A nearby question can supply context for an answer. Prefer a closing
+        # sentence inside the range; a question on its own is rarely a payoff.
+        context = ''
+        if speech and applied in ('auto','podcast','interview','tutorial'):
+            first = bisect_left(starts, max(0,second-maximum))
+            last = bisect_left(starts, second+2)
+            for index in reversed(range(first,last)):
+                question = cues[index]
+                if not question['text'].rstrip().endswith('?'):
+                    continue
+                for answer in cues[index+1:bisect_left(starts, question['start']+maximum)]:
+                    span = answer['end']-question['start']
+                    if (minimum <= span <= maximum and answer['end'] >= second
+                            and answer['text'].rstrip().endswith(('.','!'))):
+                        start, end = question['start'], answer['end']
+                        context = ' Includes a question and the following sentence ending.'
+                        break
+                if context:
+                    break
         if any(min(end,h['end']) > max(start,h['start']) for h in selected):
             continue
         evidence = dict(audio=round(audio,3), motion=round(motion,3), speech=round(speech,3))
         strongest = max(zip(weights,(audio,motion,speech),evidence),key=lambda t:t[0]*t[1])[2]
         selected.append(dict(start=start,end=end,peak=second,score=round(score,4),
-                             components=evidence,reason=f'Strongest signal: {strongest} near {second}s.'))
+                             components=evidence,profile_used=applied,
+                             reason=f'Strongest signal: {strongest} near {second}s.' + context))
         if len(selected)==count:
             break
     return selected

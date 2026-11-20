@@ -121,8 +121,8 @@ def validate(p):
         c['title'] = str(c.get('title', 'Clip'))[:160]
         if c.get('aspect') not in ('9:16', '16:9', '1:1'):
             raise ValueError('Choose 9:16, 16:9, or 1:1')
-        if c.get('fit') not in ('fit', 'fill'):
-            raise ValueError('Choose fit or fill')
+        if c.get('fit') not in ('fit', 'fill', 'blur'):
+            raise ValueError('Choose fit, fill or blurred background')
         c['x'] = number(c.get('x', .5), 0, 1)
         c['y'] = number(c.get('y', .5), 0, 1)
         c['gain'] = number(c.get('gain', 0), -60, 12)
@@ -239,7 +239,7 @@ def start(pid, action, clip_ids=None, language='auto', model='base', count=7, mi
             raise ValueError('Source file changed. Import it as a new project to protect timing.')
         if profile not in offline_scan.PROFILES:
             raise ValueError('Unknown content profile')
-        if action not in ('export', 'analyze', 'scan', 'waveform'):
+        if action not in ('export', 'analyze', 'scan', 'proxy', 'waveform'):
             raise ValueError('Unknown action')
         selected = [c for c in p['clips'] if c['id'] in (clip_ids or [])]
         if action == 'export' and not selected:
@@ -295,7 +295,31 @@ def worker(p, job, selected, language, model):
             raise InterruptedError('Cancelled')
     try:
         update_job(pid, jid, state='running', stage=job['action'])
-        if job['action'] == 'waveform':
+        if job['action'] == 'proxy':
+            source = p['source']
+            partial = work / 'preview.partial.mp4'
+            cmd = ['ffmpeg','-nostdin','-v','error','-y','-i',source['path']]
+            if source.get('video', True):
+                cmd += ['-map', f"0:{source['video_index']}" if source.get('video_index') is not None else '0:v:0',
+                        '-vf', "scale=640:640:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1"]
+            else:
+                cmd += ['-filter_complex','[0:a]showwaves=s=360x640:mode=cline:rate=30[v]','-map','[v]']
+            run(cmd + ['-map','0:a:0?','-c:a','aac','-c:v','libx264','-threads','2','-r','30',
+                       '-preset','veryfast','-pix_fmt','yuv420p','-movflags','+faststart',str(partial)])
+            if abs(probe(partial)['duration'] - source['duration']) > .3:
+                raise ValueError('Preview duration differs from source')
+            with LOCK:
+                if ctl['cancel'].is_set():
+                    raise InterruptedError('Cancelled')
+                current = load(pid)
+                if identity(source['path']) != {k: source[k] for k in ('path','size','mtime_ns')}:
+                    raise ValueError('Source changed during preview generation')
+                proxy = folder(pid) / 'preview.mp4'
+                os.replace(partial,proxy)
+                current['proxy'] = str(proxy)
+                atomic(folder(pid) / 'project.json', current)
+            update_job(pid,jid,state='completed',stage='Preview ready',progress=1)
+        elif job['action'] == 'waveform':
             run([os.sys.executable, str(ROOT / 'workspace.py'), '--waveform',
                  p['source']['path'], str(work / 'waveform.json'), str(p['source']['duration'])])
             with LOCK:
@@ -341,6 +365,8 @@ def worker(p, job, selected, language, model):
                     if origin in known:
                         continue
                     clip = new_clip(hit['start'], hit['end'], f"Highlight at {hit['peak']}s")
+                    if hit['profile_used'] in ('gameplay','tutorial') and p['source']['width'] > p['source']['height']:
+                        clip['fit'] = 'blur'
                     clip['suggestion'] = dict(hit, origin=origin, profile=opts['profile'], version=1,
                         warning='Review context and payoff.', excerpt='', provider='offline-signals')
                     clip['normalize'] = p['source']['audio']
@@ -383,6 +409,11 @@ def render(p, c, dest, run):
     work = dest.parent
     if c['fit'] == 'fit':
         vf = f'scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2'
+    elif c['fit'] == 'blur':
+        vf = (f'split[base][subject];[base]scale={w//4}:{h//4}:force_original_aspect_ratio=increase,'
+              f'crop={w//4}:{h//4},boxblur=8,scale={w}:{h},setsar=1[bg];'
+              f'[subject]scale={w}:{h}:force_original_aspect_ratio=decrease,setsar=1[fg];'
+              '[bg][fg]overlay=(W-w)/2:(H-h)/2')
     else:
         vf = (f'scale={w}:{h}:force_original_aspect_ratio=increase,'
               f'crop={w}:{h}:(iw-ow)*{c["x"]}:(ih-oh)*{c["y"]}')
@@ -433,7 +464,18 @@ def render(p, c, dest, run):
     else:
         cmd += ['-c', 'copy']
     if c['normalize'] and not c['mute'] and p['source']['audio']:
-        cmd += ['-c:a','aac','-af','loudnorm=I=-16:TP=-1.5:LRA=11','-ar','48000']
+        norm = 'loudnorm=I=-16:TP=-1.5:LRA=11'
+        run(['ffmpeg','-nostdin','-v','info','-f','concat','-safe','1','-i','concat.txt',
+             '-vn','-af',norm+':print_format=json','-f','null','-'])
+        log = (work / 'process.log').read_text(encoding='utf-8',errors='replace')
+        stats = re.search(r'\{\s*"input_i".*?\}',log,re.S)
+        if stats:
+            values = json.loads(stats.group())
+            fields = {'measured_I':'input_i','measured_TP':'input_tp','measured_LRA':'input_lra',
+                      'measured_thresh':'input_thresh','offset':'target_offset'}
+            if all(math.isfinite(float(values[k])) for k in fields.values()):
+                norm += ''.join(f':{k}={values[v]}' for k,v in fields.items()) + ':linear=true'
+        cmd += ['-c:a','aac','-af',norm,'-ar','48000']
         if '-c' in cmd:
             cmd[cmd.index('-c')] = '-c:v'
     run(cmd + ['-movflags', '+faststart', str(temp)])
@@ -445,9 +487,16 @@ def render(p, c, dest, run):
         raise ValueError('Export validation failed: audio stream mismatch')
     run(['ffmpeg', '-v', 'error', '-xerror', '-i', str(temp), '-f', 'null', '-'])
     os.replace(temp, dest)
+    seconds = actual['duration']
+    if w > h or seconds > 180:
+        shorts = 'Outside the square/vertical or three-minute Shorts limits.'
+    elif seconds > 60:
+        shorts = 'An active copyright claim can block this Short worldwide.'
+    else:
+        shorts = 'Review rights before publishing.'
     atomic(dest.with_suffix('.json'), dict(source=identity(p['source']['path']), segments=c['segments'],
         dimensions=[w,h], duration=actual['duration'], fps=actual['fps'], codec=actual['codec'],
-        audio=actual['audio'], review_rights=True, suggestion=c.get('suggestion')))
+        audio=actual['audio'], review_rights=True, youtube_shorts_note=shorts, suggestion=c.get('suggestion')))
     for kind in ('srt', 'vtt'):
         dest.with_suffix('.' + kind).write_text(subtitles(c, p['transcript'], kind), encoding='utf-8')
 
@@ -504,6 +553,8 @@ def api(handler, method, route, query):
                 p = load(pid)
                 path = (query.get('path') or [''])[0]
                 allowed = {p['source']['path']}
+                if p.get('proxy'):
+                    allowed.add(p['proxy'])
                 for j in p['jobs']:
                     for f in j.get('files', []):
                         allowed.update((f, str(Path(f).with_suffix('.srt')), str(Path(f).with_suffix('.vtt')), str(Path(f).with_suffix('.json'))))
@@ -518,7 +569,7 @@ def api(handler, method, route, query):
                 result = create(body['source'])
             elif op == 'save':
                 result = save(pid, body)
-            elif op in ('export', 'analyze', 'scan', 'waveform'):
+            elif op in ('export', 'analyze', 'scan', 'proxy', 'waveform'):
                 result = start(pid, op, body.get('clips'), body.get('language', 'auto'), body.get('model', 'base'), body.get('count', 7), body.get('min_sec', 20), body.get('max_sec', 45), body.get('profile','auto'))
             elif op == 'cancel':
                 with LOCK:
@@ -537,6 +588,7 @@ def api(handler, method, route, query):
                     if any(src[k] != old[k] for k in ('width', 'height', 'audio')) or abs(src['duration'] - old['duration']) > .05:
                         raise ValueError('Replacement media has different duration, dimensions, or audio. Import it as a new project.')
                     p['source'] = src
+                    p.pop('proxy',None)
                     p['revision'] += 1
                     atomic(folder(pid) / 'project.json', p)
                     result = p
