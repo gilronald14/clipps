@@ -584,9 +584,15 @@ def api(handler, method, route, query):
                 for j in p['jobs']:
                     for f in j.get('files', []):
                         allowed.update((f, str(Path(f).with_suffix('.srt')), str(Path(f).with_suffix('.vtt')), str(Path(f).with_suffix('.json'))))
-                if path not in allowed:
+                # Windows may canonicalize the drive/path spelling during import.
+                # Compare resolved paths instead of raw strings, but serve only
+                # the already approved project path, never an arbitrary request.
+                canonical = lambda candidate: os.path.normcase(os.path.realpath(candidate))
+                approved = {canonical(candidate): candidate for candidate in allowed}
+                selected = approved.get(canonical(path)) if path else None
+                if selected is None:
                     raise ValueError('File is not part of this project')
-                handler._serve_file(path)
+                handler._serve_file(selected)
             else:
                 raise ValueError('Unknown workspace operation')
         else:
