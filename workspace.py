@@ -148,7 +148,8 @@ def validate(p):
 def new_clip(start, end, title='New clip'):
     return dict(id=uuid.uuid4().hex, title=title, segments=[dict(start=start, end=end)],
                 aspect='9:16', fit='fit', x=.5, y=.5, gain=0, mute=False,
-                normalize=False, captions=True, font_size=40, color='#ffffff')
+                normalize=False, captions=True, font_size=40, color='#ffffff',
+                platform='YouTube Shorts', resolution='720p')
 
 
 def create(path):
@@ -243,7 +244,7 @@ def update_job(pid, jid, **values):
         atomic(folder(pid) / 'project.json', p)
 
 
-def start(pid, action, clip_ids=None, language='auto', model='base', count=7, min_sec=20, max_sec=45, profile='auto'):
+def start(pid, action, clip_ids=None, language='auto', model='base', count=7, min_sec=20, max_sec=45, profile='auto', platform='YouTube Shorts', resolution='720p'):
     with LOCK:
         legacy = __import__('sys').modules.get('webapp')
         if legacy and legacy.JOB.state == 'running':
@@ -255,6 +256,10 @@ def start(pid, action, clip_ids=None, language='auto', model='base', count=7, mi
             raise ValueError('Source file changed. Import it as a new project to protect timing.')
         if profile not in offline_scan.PROFILES:
             raise ValueError('Unknown content profile')
+        if platform not in ('custom', 'YouTube Shorts', 'TikTok', 'Instagram Reels', 'Facebook Reels', 'Vertical', 'Square', 'Landscape'):
+            raise ValueError('Unknown export platform')
+        if resolution not in ('720p', '1080p'):
+            raise ValueError('Unknown export resolution')
         if action not in ('export', 'preview', 'analyze', 'scan', 'proxy', 'waveform'):
             raise ValueError('Unknown action')
         selected = [c for c in p['clips'] if c['id'] in (clip_ids or [])]
@@ -269,7 +274,7 @@ def start(pid, action, clip_ids=None, language='auto', model='base', count=7, mi
         max_sec = number(max_sec, min_sec, 600)
         jid = uuid.uuid4().hex
         job = dict(id=jid, action=action, state='queued', stage='queued',
-                   progress=None, files=[], error='', options=dict(count=count, min_sec=min_sec, max_sec=max_sec, profile=profile), revision=p['revision'], created=time.time())
+                   progress=None, files=[], error='', options=dict(count=count, min_sec=min_sec, max_sec=max_sec, profile=profile, platform=platform, resolution=resolution), revision=p['revision'], created=time.time())
         p['jobs'] = (p['jobs'] + [job])[-30:]
         atomic(folder(pid) / 'project.json', p)
         cancel = threading.Event()
@@ -390,6 +395,12 @@ def worker(p, job, selected, language, model):
                     if origin in known:
                         continue
                     clip = new_clip(hit['start'], hit['end'], f"Highlight at {hit['peak']}s")
+                    clip['platform'] = opts['platform']
+                    clip['resolution'] = opts['resolution']
+                    if opts['platform'] == 'Square':
+                        clip['aspect'] = '1:1'
+                    elif opts['platform'] == 'Landscape':
+                        clip['aspect'] = '16:9'
                     if p['source'].get('video', True) and p['source']['width'] > p['source']['height']:
                         # Safe default for a landscape clip until face/screen
                         # analysis supplies a more specific layout.
@@ -608,7 +619,7 @@ def api(handler, method, route, query):
             elif op == 'save':
                 result = save(pid, body)
             elif op in ('export', 'preview', 'analyze', 'scan', 'proxy', 'waveform'):
-                result = start(pid, op, body.get('clips'), body.get('language', 'auto'), body.get('model', 'base'), body.get('count', 7), body.get('min_sec', 20), body.get('max_sec', 45), body.get('profile','auto'))
+                result = start(pid, op, body.get('clips'), body.get('language', 'auto'), body.get('model', 'base'), body.get('count', 7), body.get('min_sec', 20), body.get('max_sec', 45), body.get('profile','auto'), body.get('platform','YouTube Shorts'), body.get('resolution','720p'))
             elif op == 'cancel':
                 with LOCK:
                     j = ACTIVE.get(body['job'])
