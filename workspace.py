@@ -153,8 +153,12 @@ def new_clip(start, end, title='New clip'):
 
 def create(path):
     source = probe(path)
+    first_clip = new_clip(0, min(30, source['duration']), 'Manual starting clip')
+    if source['video'] and source['width'] > source['height']:
+        # Preserve the entire widescreen image without black sidebars.
+        first_clip['fit'] = 'blur'
     p = dict(schema=2, id=uuid.uuid4().hex, revision=0, title=Path(path).stem,
-             source=source, transcript=[], clips=[new_clip(0, min(30, source['duration']))],
+             source=source, transcript=[], clips=[first_clip],
              jobs=[], created=time.time(), updated=time.time())
     atomic(folder(p['id']) / 'project.json', p)
     return p
@@ -386,7 +390,9 @@ def worker(p, job, selected, language, model):
                     if origin in known:
                         continue
                     clip = new_clip(hit['start'], hit['end'], f"Highlight at {hit['peak']}s")
-                    if hit['profile_used'] in ('gameplay','tutorial') and p['source']['width'] > p['source']['height']:
+                    if p['source'].get('video', True) and p['source']['width'] > p['source']['height']:
+                        # Safe default for a landscape clip until face/screen
+                        # analysis supplies a more specific layout.
                         clip['fit'] = 'blur'
                     clip['suggestion'] = dict(hit, origin=origin, profile=opts['profile'], version=1,
                         warning='Review context and payoff.', excerpt='', provider='offline-signals')
