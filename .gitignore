@@ -93,4 +93,6 @@ verification/*
 !verification/smoke-ffprobe.json
 
 !offline_scan.py
+!composition.py
+!speech_chunks.py
 !OFFLINE_STUDIO.md

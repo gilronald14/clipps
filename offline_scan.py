@@ -15,6 +15,7 @@ PROFILES = {
     'podcast': (.40, .05, .55),
     'tutorial': (.25, .35, .40),
     'livestream': (.40, .40, .20),
+    'vlog': (.25, .30, .45),
 }
 
 
@@ -33,14 +34,20 @@ def blocks(path, options, size):
 
 def measure(source):
     path = source['path']
-    audio, motion = [], []
+    audio, motion, levels = [], [], []
     if source['audio']:
         history = deque(maxlen=20)
         for block in blocks(path, ['-vn', '-ac', '1', '-ar', '4000', '-f', 's16le'], 8000):
             samples = array('h', block)
             rms = math.sqrt(sum(v*v for v in samples) / len(samples)) / 32768
             baseline = sum(history) / len(history) if history else rms
-            audio.append(min(1., max(0., rms-baseline) / max(.035, baseline)))
+            levels.append(round(rms,5))
+            # Count transitions within the second, including bursts separated by
+            # a pause that disappear in a one-second average.
+            bands = [math.sqrt(sum(v*v for v in samples[i:i+400])/len(samples[i:i+400]))/32768
+                     for i in range(0,len(samples),400)]
+            novelty = sum(abs(a-b) for a,b in zip(bands,bands[1:]))/max(1,len(bands)-1)
+            audio.append(min(1., (max(0., rms-baseline)+novelty*.6) / max(.035, baseline)))
             history.append(rms)
     if source.get('video', True):
         previous = None
@@ -51,7 +58,7 @@ def measure(source):
             delta = sum(abs(a-b) for a,b in zip(previous, frame)) if previous else 0
             motion.append(min(1., delta / (576*48)))
             previous = frame
-    return {'audio': audio, 'motion': motion}
+    return {'audio': audio, 'motion': motion, 'levels': levels}
 
 
 def rank(source, signals, cues, count, minimum, maximum, profile):
@@ -107,7 +114,7 @@ def rank(source, signals, cues, count, minimum, maximum, profile):
         # A nearby question can supply context for an answer. Prefer a closing
         # sentence inside the range; a question on its own is rarely a payoff.
         context = ''
-        if speech and applied in ('auto','podcast','interview','tutorial'):
+        if speech and applied in ('auto','podcast','interview','tutorial','vlog'):
             first = bisect_left(starts, max(0,second-maximum))
             last = bisect_left(starts, second+2)
             for index in reversed(range(first,last)):
@@ -123,6 +130,20 @@ def rank(source, signals, cues, count, minimum, maximum, profile):
                         break
                 if context:
                     break
+        levels=signals.get('levels',[])
+        if levels and not context and speech==0:
+            # Move a cut to a nearby quiet interval only when it still includes
+            # the detected event and satisfies the requested running time.
+            for edge in ('start','end'):
+                target=start if edge=='start' else end
+                quiet=[i+.5 for i in range(max(0,int(target)-1),min(len(levels),int(target)+2))
+                       if levels[i]<.008]
+                if quiet:
+                    cut=min(quiet,key=lambda i:abs(i-target))
+                    if edge=='start' and cut<second and minimum<=end-cut<=maximum:
+                        start=cut
+                    if edge=='end' and second<cut<=duration and minimum<=cut-start<=maximum:
+                        end=cut
         if any(min(end,h['end']) > max(start,h['start']) for h in selected):
             continue
         evidence = dict(audio=round(audio,3), motion=round(motion,3), speech=round(speech,3))

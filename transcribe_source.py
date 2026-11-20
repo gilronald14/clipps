@@ -109,6 +109,7 @@ def transcribe(source, out_path, model="base", language="en", log=print,
     dur = probe_duration(source)
     log(f"  source duration {dur:.1f}s ({dur/60:.1f} min)")
     from offline_scan import blocks
+    os.environ['HF_HUB_OFFLINE']='1'
     from faster_whisper import WhisperModel
     device, compute = pick_device(log)
     t0 = time.time()
@@ -119,23 +120,19 @@ def transcribe(source, out_path, model="base", language="en", log=print,
         out_segments = []
         sample_offset = 0
         detected = language
-        for raw in blocks(source, ['-vn', '-ac', '1', '-ar', '16000', '-f', 's16le'], 16000*2*120):
+        from speech_chunks import windows, owned_segment
+        pcm = blocks(source, ['-vn', '-ac', '1', '-ar', '16000', '-f', 's16le'], 16000*2*120)
+        for raw, offset, left, right in windows(pcm):
             audio = np.frombuffer(raw, '<i2').astype(np.float32) / 32768
-            offset = sample_offset / 16000
-            sample_offset += len(audio)
+            sample_offset = round(right * 16000)
             segs, info = model_instance.transcribe(audio, language=language, word_timestamps=True,
                                                   vad_filter=True, beam_size=1)
             for seg in segs:
-                text = (seg.text or '').strip()
-                start = min(dur, offset + seg.start)
-                end = min(dur, offset + seg.end)
-                if not text or end <= start:
-                    continue
-                detected = detected or info.language
-                words = [dict(start=round(offset+w.start,3), end=round(min(dur,offset+w.end),3),
-                              text=w.word.strip()) for w in (seg.words or []) if w.word.strip()]
-                out_segments.append(dict(start=round(start,3), end=round(end,3), text=text, words=words))
-            log(f"    decoded {sample_offset/16000:.0f}s / {dur:.0f}s")
+                cue = owned_segment(seg,offset,left,right,dur)
+                if cue and cue['end']>cue['start']:
+                    detected = detected or info.language
+                    out_segments.append(cue)
+            log(f"    decoded {right:.0f}s / {dur:.0f}s")
         if not sample_offset:
             raise ValueError("No decodable audio")
         return out_segments, detected

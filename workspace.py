@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 import offline_scan
+import composition
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / 'projects'
@@ -116,13 +117,17 @@ def validate(p):
             s['end'] = number(s['end'], 0, duration)
             if s['end'] - s['start'] < 1 / 30:
                 raise ValueError('Each segment must be at least one output frame')
+        if c.get('caption_style','plain') not in ('plain','word'):
+            raise ValueError('Unknown caption style')
         if c.get('resolution','720p') not in ('720p','1080p'):
             raise ValueError('Choose 720p or 1080p')
         c['title'] = str(c.get('title', 'Clip'))[:160]
         if c.get('aspect') not in ('9:16', '16:9', '1:1'):
             raise ValueError('Choose 9:16, 16:9, or 1:1')
-        if c.get('fit') not in ('fit', 'fill', 'blur'):
+        if c.get('fit') not in ('fit', 'fill', 'blur','follow','stack','webcam'):
             raise ValueError('Choose fit, fill or blurred background')
+        composition.validate(c)
+        c['crf'] = int(number(c.get('crf',20),16,28))
         c['x'] = number(c.get('x', .5), 0, 1)
         c['y'] = number(c.get('y', .5), 0, 1)
         c['gain'] = number(c.get('gain', 0), -60, 12)
@@ -171,7 +176,7 @@ def save(pid, incoming):
         return p
 
 
-def cues(clip, transcript):
+def cues(clip, transcript, emphasize=False):
     """Intersect source captions with every EDL segment and remap to edited time."""
     out, offset = [], 0.0
     for seg in clip['segments']:
@@ -183,6 +188,13 @@ def cues(clip, transcript):
                 if words and ''.join(text.split()) == ''.join(w['text'].strip() for w in words):
                     kept = [w for w in words if w['end'] > a and w['start'] < b]
                     if not kept:
+                        continue
+                    if emphasize:
+                        for w in kept:
+                            begin,finish=max(a,w['start']),min(b,w['end'])
+                            if finish>begin:
+                                out.append(dict(start=offset+begin-seg['start'],end=offset+finish-seg['start'],
+                                                text=w['text'],emphasized=True))
                         continue
                     text = ' '.join(w['text'] for w in kept)
                     a, b = max(a, kept[0]['start']), min(b, kept[-1]['end'])
@@ -239,10 +251,10 @@ def start(pid, action, clip_ids=None, language='auto', model='base', count=7, mi
             raise ValueError('Source file changed. Import it as a new project to protect timing.')
         if profile not in offline_scan.PROFILES:
             raise ValueError('Unknown content profile')
-        if action not in ('export', 'analyze', 'scan', 'proxy', 'waveform'):
+        if action not in ('export', 'preview', 'analyze', 'scan', 'proxy', 'waveform'):
             raise ValueError('Unknown action')
         selected = [c for c in p['clips'] if c['id'] in (clip_ids or [])]
-        if action == 'export' and not selected:
+        if action in ('export','preview') and not selected:
             raise ValueError('Select at least one clip')
         if action == 'waveform' and not p['source']['audio']:
             raise ValueError('This source has no audio waveform')
@@ -337,7 +349,7 @@ def worker(p, job, selected, language, model):
                 transcript = json.loads((work / 'transcript.json').read_text(encoding='utf-8'))
                 cues_for_ranking = transcript['segments']
             update_job(pid,jid,stage='Measuring audio and motion')
-            cache = folder(pid) / 'signals-v1.json'
+            cache = folder(pid) / 'signals-v2.json'
             data = json.loads(cache.read_text(encoding='utf-8')) if cache.exists() else {}
             source_id = identity(p['source']['path'])
             if data.get('source') != source_id:
@@ -349,6 +361,15 @@ def worker(p, job, selected, language, model):
             opts = job['options']
             hits = offline_scan.rank(p['source'], data['signals'], cues_for_ranking, opts['count'],
                                      opts['min_sec'], opts['max_sec'], opts['profile'])
+            layouts = [{} for _ in hits]
+            if job['action']=='analyze' and hits and p['source'].get('video',True):
+                update_job(pid,jid,stage='Checking local face layouts')
+                atomic(work/'camera-input.json',[p['source'],hits])
+                run([os.sys.executable,str(ROOT/'composition.py'),str(work/'camera-input.json'),str(work/'camera.json')])
+                camera=json.loads((work/'camera.json').read_text(encoding='utf8'))
+                layouts=camera['layouts']
+                if camera['warning']:
+                    update_job(pid,jid,camera_warning=camera['warning'])
             with LOCK:
                 current = load(pid)
                 if ctl['cancel'].is_set():
@@ -360,7 +381,7 @@ def worker(p, job, selected, language, model):
                     current['analysis'] = {key: transcript.get(key) for key in ('provider','timing','model','language')}
                 known = {c.get('suggestion', {}).get('origin') for c in current['clips']}
                 added = 0
-                for hit in hits:
+                for hit,layout in zip(hits,layouts):
                     origin = f"{opts['profile']}:{hit['start']:.3f}:{hit['end']:.3f}"
                     if origin in known:
                         continue
@@ -369,6 +390,7 @@ def worker(p, job, selected, language, model):
                         clip['fit'] = 'blur'
                     clip['suggestion'] = dict(hit, origin=origin, profile=opts['profile'], version=1,
                         warning='Review context and payoff.', excerpt='', provider='offline-signals')
+                    clip.update(layout)
                     clip['normalize'] = p['source']['audio']
                     clip['suggestion']['excerpt'] = ' '.join(c['text'] for c in cues_for_ranking
                         if c['start'] < hit['end'] and c['end'] > hit['start'])[:800]
@@ -420,10 +442,12 @@ def render(p, c, dest, run):
     parts = []
     for i, seg in enumerate(c['segments']):
         part = work / f'part_{i}.mp4'
+        if c['fit'] in ('stack','follow','webcam'):
+            vf = composition.graph(c,seg['start'],w,h)
         cmd = ['ffmpeg', '-v', 'error', '-nostdin', '-y', '-ss', str(seg['start']),
                '-i', p['source']['path'], '-t', str(seg['end'] - seg['start']),
                '-map', '0:v:0', '-vf', vf + ',setsar=1', '-r', '30',
-               '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p']
+               '-c:v', 'libx264', '-preset', 'veryfast', '-crf', str(c.get('crf',20)), '-pix_fmt', 'yuv420p']
         if not p['source'].get('video', True):
             i_map = cmd.index('-map')
             cmd[i_map:i_map+4] = ['-filter_complex',
@@ -441,7 +465,7 @@ def render(p, c, dest, run):
     (work / 'concat.txt').write_text(''.join(f"file '{x.name}'\n" for x in parts), encoding='utf-8')
     temp = dest.with_suffix('.partial.mp4')
     cmd = ['ffmpeg', '-v', 'error', '-nostdin', '-y', '-f', 'concat', '-safe', '1', '-i', 'concat.txt']
-    mapped = cues(c, p['transcript'])
+    mapped = cues(c, p['transcript'], emphasize=c.get('caption_style')=='word')
     if c['captions'] and mapped:
         # ASS dialogue is plain text; strip override syntax and escape line breaks.
         def ts(t):
@@ -458,9 +482,11 @@ def render(p, c, dest, run):
                '[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n')
         for cue in mapped:
             txt = cue['text'].replace('\\', '＼').replace('{', '｛').replace('}', '｝').replace('\r', '').replace('\n', r'\N')
+            if cue.get('emphasized'):
+                txt = r'{\fscx108\fscy108\t(0,90,\fscx100\fscy100)}' + txt
             ass += f'Dialogue: 0,{ts(cue["start"])},{ts(cue["end"])},Default,,0,0,0,,{txt}\n'
         (work / 'captions.ass').write_text(ass, encoding='utf-8')
-        cmd += ['-vf', 'subtitles=captions.ass', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'copy']
+        cmd += ['-vf', 'subtitles=captions.ass', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', str(c.get('crf',20)), '-c:a', 'copy']
     else:
         cmd += ['-c', 'copy']
     if c['normalize'] and not c['mute'] and p['source']['audio']:
@@ -569,7 +595,7 @@ def api(handler, method, route, query):
                 result = create(body['source'])
             elif op == 'save':
                 result = save(pid, body)
-            elif op in ('export', 'analyze', 'scan', 'proxy', 'waveform'):
+            elif op in ('export', 'preview', 'analyze', 'scan', 'proxy', 'waveform'):
                 result = start(pid, op, body.get('clips'), body.get('language', 'auto'), body.get('model', 'base'), body.get('count', 7), body.get('min_sec', 20), body.get('max_sec', 45), body.get('profile','auto'))
             elif op == 'cancel':
                 with LOCK:
