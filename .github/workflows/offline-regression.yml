@@ -46,6 +46,12 @@ jobs:
           ffprobe -hide_banner -version
           ffmpeg -hide_banner -filters | grep -E '(^| )showwaves|(^| )loudnorm|(^| )subtitles'
 
+      - name: Check editor JavaScript syntax
+        shell: bash
+        run: |
+          python -c "from pathlib import Path; s=Path('editor.html').read_text(encoding='utf-8'); Path('editor-ui-check.js').write_text(s.split('<script>',1)[1].split('</script>',1)[0],encoding='utf-8')"
+          node --check editor-ui-check.js
+
       - name: Run complete model-free regression suite
         env:
           PYTHONUTF8: '1'
