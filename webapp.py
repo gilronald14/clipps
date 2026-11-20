@@ -244,6 +244,16 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "Shortsmith"
     protocol_version = "HTTP/1.1"
 
+    def handle(self):
+        # Browsers often cancel an idle HTTP keep-alive connection when a video
+        # seeks or the tab reloads. On Windows this can surface as WinError 10053.
+        # Suppress only expected transport disconnects; real application errors
+        # must still produce tracebacks.
+        try:
+            super().handle()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            return
+
     def log_message(self, fmt, *args):
         pass                                   # the page has its own log
 
@@ -262,7 +272,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
 
     def _json_body(self):
