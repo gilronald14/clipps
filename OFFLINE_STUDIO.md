@@ -1,5 +1,55 @@
 # Clipps offline studio
 
+## Beginner workflow in the editing studio
+
+The main editor at `http://127.0.0.1:8765/editor` now starts with a guided
+sequence. **You do not have to use the advanced waveform, trim, framing and
+caption controls to generate clips.** Expand the Advanced sections only if you
+want to change an automatic decision.
+
+1. **Import a recording** or open a previously saved project. The video/audio
+   source stays local.
+2. **Choose a content profile and analysis mode.** Use **Pure offline** to get
+   started without AI dependencies. For speech captions, **Offline smart** needs
+   compatible local dependencies and downloaded model weights.
+3. Pick one of two actions:
+   - **Find highlights to review:** analyzes the source and adds editable
+     suggestions. Select a suggested highlight (not the initial **New clip**
+     placeholder), render the exact edit preview, then export your chosen clip.
+   - **Find & export clips automatically:** analyzes the source and queues a
+     batch export of up to the requested number of suggested clips. This
+     bypasses the review step; **watch outputs before publishing**. Existing
+     suggestions from the selected profile can be reused when rescanning
+     produces no additional unique results.
+4. **Preview** from the center panel. **Completed clips & downloads** lists
+   exported MP4 files and accompanying subtitle/metadata sidecars.
+5. Select an **export platform and resolution**. Advanced editing settings,
+   audio gain, layout, manual captions and trim handles remain available by
+   expanding the corresponding Advanced section.
+
+A successful export proves technical validity, **not** that a clip has a good
+hook, understandable context or payoff. In Pure offline mode there is no
+automatic speech transcription and highlights are based on measurable signals.
+Professional editorial evaluation remains an important separate step.
+
+### Updating a Windows ZIP installation
+
+Close the old `Start_Shortsmith.bat` process before updating. If you downloaded
+a ZIP rather than cloning with Git, back up the existing `projects` and
+`uploads` folders **before replacing anything**. Either copy updated code
+into the existing installation without deleting these folders, or restore both
+folders to the same location afterwards. Saved project source paths are absolute,
+so moving the installation or uploaded media may require using **Relink source
+path**. Do not delete the original media.
+
+### Benign browser disconnects on Windows
+
+An occasional `ConnectionAbortedError: [WinError 10053]` may occur if a
+browser cancels an idle keep-alive request while seeking or reloading. The server
+ignores only expected transport disconnect exceptions; other errors are still
+reported. If the editor becomes unreachable or jobs fail, inspect the actual
+`Jobs` error and server logs instead of treating every disconnect as harmless.
+
 ## Windows quick start
 
 Install Python 3.9+ and put a native FFmpeg build with ffprobe, libx264, AAC,
