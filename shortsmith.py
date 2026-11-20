@@ -1168,7 +1168,7 @@ def transcribe(clip_path):
         audio = _load_audio_16k(clip_path)
         if audio is None or len(audio) < 16000:
             return []
-        model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+        model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8", local_files_only=True)
         segs, _ = model.transcribe(audio, language=WHISPER_LANG,
                                    word_timestamps=True, vad_filter=True)
         words = []
@@ -1624,7 +1624,26 @@ def render_clip(clip, workdir, orig_w, orig_h, fps):
     hits = []
     if burn_captions:
         print("  [4/5] transcribing...")
-        words = transcribe(os.path.join(workdir, "stitched.mp4"))
+        cached_path = os.environ.get("SHORTSMITH_TRANSCRIPT")
+        words = None
+        if cached_path:
+            from workspace import identity
+            with open(cached_path, encoding="utf-8") as stream:
+                cached = json.load(stream)
+            if cached.get("timing") == "word" and cached.get("source_identity") == identity(SRC):
+                words = []
+                for left, right, *_ in render_list:
+                    offset = sum(seg[1] - seg[0] for seg in render_list if seg[0] < left)
+                    for cue in cached["segments"]:
+                        if cue["end"] <= start+left or cue["start"] >= start+right:
+                            continue
+                        for word in cue.get("words", []):
+                            a = max(left, word["start"]-start)
+                            b = min(right, word["end"]-start)
+                            if b > a:
+                                words.append(dict(start=offset+a-left,end=offset+b-left,text=word["text"]))
+        if words is None:
+            words = transcribe(os.path.join(workdir, "stitched.mp4"))
         if words:
             print(f"        {len(words)} words")
             # A picture for whatever the speaker actually named. This runs

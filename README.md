@@ -3,11 +3,13 @@
 Run `python webapp.py`, then open **http://127.0.0.1:8765/editor**.
 The original automatic generator remains at `/` and the existing Windows launcher still works.
 
-The new manual workspace requires Python 3.9+ and native FFmpeg/ffprobe on PATH.
+Start with [the offline studio guide](OFFLINE_STUDIO.md) for model-free highlight selection, podcast exports and Shorts duration controls.
+
+The editing workspace requires Python 3.9+ and native FFmpeg/ffprobe on PATH.
 It does not require AI libraries, models, credentials, or a GPU. FFmpeg needs
 libx264 for MP4 and libass for burned captions. For optional local transcription
 and suggestions, install the existing requirements and download the Whisper model
-on a networked machine before offline use. Model loading may download weights.
+on a networked machine before offline use. Runtime model loading reads the local cache.
 
 New workflow: import a local path or upload → optionally transcribe/suggest →
 review clips → edit ordered trims and captions → preview → export selected/all.

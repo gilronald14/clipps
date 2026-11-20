@@ -234,7 +234,7 @@ def candidates(name):
 
 
 def resolve(name, kind="auto"):
-    """Best available picture for `name`: user file, cache, then download."""
+    """Best available picture for `name`: user file or previously prepared cache."""
     if not name:
         return None
     for key in candidates(name):
@@ -245,15 +245,6 @@ def resolve(name, kind="auto"):
         c = cached(key)
         if c:
             return c
-    for key in candidates(name):
-        if kind in ("auto", "brand"):
-            p = fetch(key, "brand")
-            if p:
-                return p
-    for key in candidates(name):
-        p = fetch(CONCEPT_ICONS.get(key, key), "concept")
-        if p:
-            return p
     return None
 
 

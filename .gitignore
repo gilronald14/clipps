@@ -91,3 +91,6 @@ uploads/
 verification/*
 !verification/smoke-edited.mp4
 !verification/smoke-ffprobe.json
+
+!offline_scan.py
+!OFFLINE_STUDIO.md

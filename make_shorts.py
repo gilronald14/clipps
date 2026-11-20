@@ -30,9 +30,6 @@ import time
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
-from transcribe_source import probe_duration, transcribe    # noqa: E402
-
-
 def detect_silences(source, noise="-35dB", minimum=0.20):
     """Silent spans in the source, as (start, end) pairs.
 
@@ -241,6 +238,10 @@ def main():
     ap.add_argument("--reuse", action="store_true",
                     help="reuse an existing highlights.json instead of re-ranking")
     ap.add_argument("--keep", action="store_true", help="keep work dirs")
+    ap.add_argument("--pure-offline", action="store_true",
+                    help="create an editable project and export signal-ranked highlights without models")
+    from offline_scan import PROFILES
+    ap.add_argument("--profile", choices=tuple(PROFILES), default="auto")
     ap.add_argument("--open", action="store_true",
                     help="open the output folder when finished")
     a = ap.parse_args()
@@ -248,6 +249,50 @@ def main():
     src = os.path.abspath(a.input)
     if not os.path.exists(src):
         raise SystemExit(f"input not found: {src}")
+
+    if a.pure_offline:
+        if a.llm:
+            ap.error("--pure-offline and --llm cannot be combined")
+        import shutil
+        from pathlib import Path
+        import workspace
+        project = workspace.create(src)
+        pid = project['id']
+        print(f"Editable project: {workspace.folder(pid)}", flush=True)
+
+        def wait(job):
+            while True:
+                with workspace.LOCK:
+                    current = workspace.load(pid)
+                    if job['id'] not in workspace.ACTIVE:
+                        entry = next(j for j in current['jobs'] if j['id'] == job['id'])
+                        if entry['state'] != 'completed':
+                            raise SystemExit(entry['error'] or entry['state'])
+                        return current, entry
+                time.sleep(.2)
+
+        try:
+            current, _ = wait(workspace.start(pid, 'scan', count=a.clips, min_sec=a.min_sec,
+                                              max_sec=a.max_sec, profile=a.profile))
+            ids = [c['id'] for c in current['clips'] if c.get('suggestion')]
+            if not ids:
+                print("No signal-based highlights. The project is available for manual editing.")
+                return
+            _, export = wait(workspace.start(pid, 'export', ids))
+            target = Path(a.out) / pid
+            target.mkdir(parents=True, exist_ok=True)
+            for output in map(Path, export['files']):
+                for suffix in ('.mp4','.srt','.vtt','.json'):
+                    file = output.with_suffix(suffix)
+                    shutil.copy2(file, target / file.name)
+            print(f"Exported {len(ids)} clips to {target}")
+            if a.open and os.name == 'nt':
+                os.startfile(target)
+        finally:
+            workspace.shutdown()
+        return
+
+    from transcribe_source import probe_duration, transcribe
 
     # Include file identity: same-named sources and replaced recordings must not share cached analysis.
     stat = os.stat(src)
@@ -361,6 +406,7 @@ def main():
     if a.keep:
         env["SHORTSMITH_KEEP"] = "1"
     os.makedirs(render_work, exist_ok=True)
+    env["SHORTSMITH_TRANSCRIPT"] = os.path.abspath(t_path)
     rc = subprocess.run([sys.executable, os.path.join(_HERE, "shortsmith.py")],
                         cwd=_HERE, env=env).returncode
     if rc != 0:

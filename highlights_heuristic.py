@@ -70,17 +70,12 @@ def rms_envelope(path, hop=0.25, keep=None):
     Decoded through ffmpeg rather than PyAV: this build of PyAV calls an
     av.open() argument faster-whisper 1.2.1 no longer passes.
     """
-    if keep is None:
-        keep = {2} if False else None
-    raw = subprocess.run(
-        ["ffmpeg", "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", "16000",
-         "-f", "s16le", "-"], capture_output=True, timeout=3600).stdout
-    if not raw:
-        return np.zeros(1, dtype=np.float32), hop
-    a = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
-    n = max(1, int(hop * 16000))
-    a = a[: len(a) // n * n].reshape(-1, n)
-    return np.sqrt((a ** 2).mean(axis=1)).astype(np.float32), hop
+    from offline_scan import blocks
+    values = []
+    for raw in blocks(path, ['-vn','-ac','1','-ar','16000','-f','s16le'], max(1,int(hop*16000))*2):
+        samples = np.frombuffer(raw,'<i2').astype(np.float32) / 32768
+        values.append(float(np.sqrt(np.mean(samples*samples))))
+    return np.asarray(values or [0], dtype=np.float32), hop
 
 
 def sentence_units(segments):

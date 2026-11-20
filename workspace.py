@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
+import offline_scan
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / 'projects'
@@ -51,15 +52,18 @@ def identity(path):
 def probe(path):
     path = str(Path(path).resolve(strict=True))
     r = subprocess.run(['ffprobe', '-v', 'error', '-show_format', '-show_streams',
-                        '-of', 'json', path], capture_output=True, text=True, timeout=30)
+                        '-of', 'json', path], capture_output=True, encoding="utf-8", timeout=30)
     if r.returncode:
         raise ValueError('Cannot read this media. Check the codec or choose an undamaged file.')
     d = json.loads(r.stdout)
     v = next((s for s in d.get('streams', []) if s['codec_type'] == 'video'
               and not s.get('disposition', {}).get('attached_pic')), None)
-    if not v:
-        raise ValueError('The selected file has no video stream')
-    duration = number(d.get('format', {}).get('duration') or v.get('duration'), .01, 604800)
+    audio = next((s for s in d['streams'] if s['codec_type'] == 'audio'), None)
+    if not v and not audio:
+        raise ValueError('No playable audio or video stream')
+    has_video = bool(v)
+    v = v or {}
+    duration = number(d.get('format', {}).get('duration') or (v or audio).get('duration'), .01, 604800)
     def rate(s):
         try:
             a, b = s.split('/')
@@ -69,12 +73,13 @@ def probe(path):
     rotation = int(float(v.get('tags', {}).get('rotate', 0)))
     for side in v.get('side_data_list', []):
         rotation = int(side.get('rotation', rotation))
-    w, h = v['width'], v['height']
+    w, h = v.get('width', 720), v.get('height', 1280)
     if abs(rotation) % 180 == 90:
         w, h = h, w
     return dict(identity(path), duration=duration, width=w, height=h,
                 fps=rate(v.get('avg_frame_rate')) or 30, rotation=rotation,
-                audio=any(s['codec_type'] == 'audio' for s in d.get('streams', [])),
+                audio=bool(audio), video=has_video, channels=(audio or {}).get('channels'),
+                sample_rate=(audio or {}).get('sample_rate'), video_index=v.get('index'),
                 codec=v.get('codec_name'), timing='source seconds; export CFR 30 fps')
 
 
@@ -87,7 +92,10 @@ def folder(pid):
 def load(pid):
     with LOCK:
         p = json.loads((folder(pid) / 'project.json').read_text(encoding='utf-8'))
-        if p.get('schema') != 1:
+        if p.get('schema') == 1:
+            p['source'].setdefault('video', True)
+            p['schema'] = 2
+        if p.get('schema') != 2:
             raise ValueError('Unsupported project schema; keep this file and use a compatible app version')
         return p
 
@@ -108,6 +116,8 @@ def validate(p):
             s['end'] = number(s['end'], 0, duration)
             if s['end'] - s['start'] < 1 / 30:
                 raise ValueError('Each segment must be at least one output frame')
+        if c.get('resolution','720p') not in ('720p','1080p'):
+            raise ValueError('Choose 720p or 1080p')
         c['title'] = str(c.get('title', 'Clip'))[:160]
         if c.get('aspect') not in ('9:16', '16:9', '1:1'):
             raise ValueError('Choose 9:16, 16:9, or 1:1')
@@ -138,7 +148,7 @@ def new_clip(start, end, title='New clip'):
 
 def create(path):
     source = probe(path)
-    p = dict(schema=1, id=uuid.uuid4().hex, revision=0, title=Path(path).stem,
+    p = dict(schema=2, id=uuid.uuid4().hex, revision=0, title=Path(path).stem,
              source=source, transcript=[], clips=[new_clip(0, min(30, source['duration']))],
              jobs=[], created=time.time(), updated=time.time())
     atomic(folder(p['id']) / 'project.json', p)
@@ -168,8 +178,16 @@ def cues(clip, transcript):
         for cue in transcript:
             a, b = max(seg['start'], cue['start']), min(seg['end'], cue['end'])
             if b > a:
+                text = cue['text']
+                words = cue.get('words', [])
+                if words and ''.join(text.split()) == ''.join(w['text'].strip() for w in words):
+                    kept = [w for w in words if w['end'] > a and w['start'] < b]
+                    if not kept:
+                        continue
+                    text = ' '.join(w['text'] for w in kept)
+                    a, b = max(a, kept[0]['start']), min(b, kept[-1]['end'])
                 out.append(dict(start=offset + a - seg['start'],
-                                end=offset + b - seg['start'], text=cue['text']))
+                                end=offset + b - seg['start'], text=text))
         offset += seg['end'] - seg['start']
     return sorted(out, key=lambda x: x['start'])
 
@@ -209,7 +227,7 @@ def update_job(pid, jid, **values):
         atomic(folder(pid) / 'project.json', p)
 
 
-def start(pid, action, clip_ids=None, language='auto', model='base', count=7, min_sec=20, max_sec=45):
+def start(pid, action, clip_ids=None, language='auto', model='base', count=7, min_sec=20, max_sec=45, profile='auto'):
     with LOCK:
         legacy = __import__('sys').modules.get('webapp')
         if legacy and legacy.JOB.state == 'running':
@@ -219,15 +237,15 @@ def start(pid, action, clip_ids=None, language='auto', model='base', count=7, mi
         p = load(pid)
         if identity(p['source']['path']) != {k: p['source'][k] for k in ('path', 'size', 'mtime_ns')}:
             raise ValueError('Source file changed. Import it as a new project to protect timing.')
-        if action not in ('export', 'analyze', 'waveform'):
+        if profile not in offline_scan.PROFILES:
+            raise ValueError('Unknown content profile')
+        if action not in ('export', 'analyze', 'scan', 'waveform'):
             raise ValueError('Unknown action')
         selected = [c for c in p['clips'] if c['id'] in (clip_ids or [])]
         if action == 'export' and not selected:
             raise ValueError('Select at least one clip')
         if action == 'waveform' and not p['source']['audio']:
             raise ValueError('This source has no audio waveform')
-        if action == 'analyze' and p['transcript']:
-            raise ValueError('Transcript already exists. Import a new project to re-transcribe without losing corrections.')
         if not re.fullmatch(r'auto|[a-z]{2,3}', language) or model not in ('tiny', 'base', 'small', 'medium'):
             raise ValueError('Invalid transcription settings')
         count = int(number(count, 1, 30))
@@ -235,7 +253,7 @@ def start(pid, action, clip_ids=None, language='auto', model='base', count=7, mi
         max_sec = number(max_sec, min_sec, 600)
         jid = uuid.uuid4().hex
         job = dict(id=jid, action=action, state='queued', stage='queued',
-                   progress=None, files=[], error='', options=dict(count=count, min_sec=min_sec, max_sec=max_sec), revision=p['revision'], created=time.time())
+                   progress=None, files=[], error='', options=dict(count=count, min_sec=min_sec, max_sec=max_sec, profile=profile), revision=p['revision'], created=time.time())
         p['jobs'] = (p['jobs'] + [job])[-30:]
         atomic(folder(pid) / 'project.json', p)
         cancel = threading.Event()
@@ -285,37 +303,56 @@ def worker(p, job, selected, language, model):
                 current['waveform'] = json.loads((work / 'waveform.json').read_text())
                 atomic(folder(pid) / 'project.json', current)
             update_job(pid, jid, state='completed', stage='completed')
-        elif job['action'] == 'analyze':
-            run([os.sys.executable, str(ROOT / 'workspace.py'), '--transcribe',
-                 p['source']['path'], str(work / 'transcript.json'), language, model])
-            transcript = json.loads((work / 'transcript.json').read_text(encoding='utf-8'))
-            # Reuse the existing offline selector; no external service is contacted.
-            update_job(pid, jid, stage='ranking')
-            run([os.sys.executable, str(ROOT / 'highlights_heuristic.py'),
-                 '--transcript', str(work / 'transcript.json'), '--source', p['source']['path'],
-                 '--clips', str(job['options']['count']), '--min', str(job['options']['min_sec']), '--max', str(job['options']['max_sec']), '--out', str(work / 'highlights.json')])
-            result = json.loads((work / 'highlights.json').read_text(encoding='utf-8'))
-            if ctl['cancel'].is_set():
-                raise InterruptedError('Cancelled')
+        elif job['action'] in ('scan','analyze'):
+            transcript = None
+            cues_for_ranking = p['transcript']
+            if job['action'] == 'analyze' and not cues_for_ranking and p['source']['audio']:
+                update_job(pid,jid,stage='Local transcription')
+                run([os.sys.executable, str(ROOT / 'workspace.py'), '--transcribe',
+                     p['source']['path'], str(work / 'transcript.json'), language, model])
+                transcript = json.loads((work / 'transcript.json').read_text(encoding='utf-8'))
+                cues_for_ranking = transcript['segments']
+            update_job(pid,jid,stage='Measuring audio and motion')
+            cache = folder(pid) / 'signals-v1.json'
+            data = json.loads(cache.read_text(encoding='utf-8')) if cache.exists() else {}
+            source_id = identity(p['source']['path'])
+            if data.get('source') != source_id:
+                atomic(work / 'source.json', p['source'])
+                run([os.sys.executable, str(ROOT / 'offline_scan.py'), str(work / 'source.json'),
+                     str(work / 'signals.json')])
+                data = dict(source=source_id, signals=json.loads((work / 'signals.json').read_text()))
+                atomic(cache, data)
+            opts = job['options']
+            hits = offline_scan.rank(p['source'], data['signals'], cues_for_ranking, opts['count'],
+                                     opts['min_sec'], opts['max_sec'], opts['profile'])
             with LOCK:
                 current = load(pid)
-                if current['revision'] != p['revision']:
-                    raise ValueError('Edits changed during analysis. Results kept in job folder; project was not overwritten.')
-                current['transcript'] = transcript['segments']
-                current['analysis'] = {'provider': 'faster-whisper', 'language': transcript.get('language'),
-                                       'ranker': 'heuristic', 'timing': 'segment', 'visual_analysis': False}
-                for h in result.get('highlights', []):
-                    c = new_clip(h['start_time'], h['end_time'], h.get('title', 'Suggestion'))
-                    c['suggestion'] = dict(provider='heuristic', editorial_score=h.get('score'),
-                        reason=h.get('virality_reason', 'Ranked using speech, audio energy and hook language.'),
-                        excerpt=' '.join(s['text'] for s in transcript['segments']
-                            if s['end'] > h['start_time'] and s['start'] < h['end_time']),
-                        warning='Heuristic estimate; review context and boundaries. No visual analysis.')
-                    current['clips'].append(c)
+                if ctl['cancel'].is_set():
+                    raise InterruptedError('Cancelled')
+                if current['revision'] != p['revision'] or source_id != identity(p['source']['path']):
+                    raise ValueError('Project or media changed during analysis. Run the scan again.')
+                if transcript is not None:
+                    current['transcript'] = cues_for_ranking
+                    current['analysis'] = {key: transcript.get(key) for key in ('provider','timing','model','language')}
+                known = {c.get('suggestion', {}).get('origin') for c in current['clips']}
+                added = 0
+                for hit in hits:
+                    origin = f"{opts['profile']}:{hit['start']:.3f}:{hit['end']:.3f}"
+                    if origin in known:
+                        continue
+                    clip = new_clip(hit['start'], hit['end'], f"Highlight at {hit['peak']}s")
+                    clip['suggestion'] = dict(hit, origin=origin, profile=opts['profile'], version=1,
+                        warning='Review context and payoff.', excerpt='', provider='offline-signals')
+                    clip['normalize'] = p['source']['audio']
+                    clip['suggestion']['excerpt'] = ' '.join(c['text'] for c in cues_for_ranking
+                        if c['start'] < hit['end'] and c['end'] > hit['start'])[:800]
+                    current['clips'].append(clip)
+                    added += 1
                 validate(current)
                 current['revision'] += 1
+                current['updated'] = time.time()
                 atomic(folder(pid) / 'project.json', current)
-            update_job(pid, jid, state='completed', stage='completed')
+            update_job(pid, jid, state='completed', stage=f'{added} new suggestions', progress=1)
         else:
             files = []
             for idx, c in enumerate(selected):
@@ -341,6 +378,8 @@ def worker(p, job, selected, language, model):
 def render(p, c, dest, run):
     """Same EDL drives render and UI playback. Accurate re-encoded cuts, 30fps output."""
     w, h = {'9:16': (720, 1280), '16:9': (1280, 720), '1:1': (720, 720)}[c['aspect']]
+    if c.get('resolution') == '1080p':
+        w, h = w * 3 // 2, h * 3 // 2
     work = dest.parent
     if c['fit'] == 'fit':
         vf = f'scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2'
@@ -354,10 +393,15 @@ def render(p, c, dest, run):
                '-i', p['source']['path'], '-t', str(seg['end'] - seg['start']),
                '-map', '0:v:0', '-vf', vf + ',setsar=1', '-r', '30',
                '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p']
+        if not p['source'].get('video', True):
+            i_map = cmd.index('-map')
+            cmd[i_map:i_map+4] = ['-filter_complex',
+                f'[0:a:0]showwaves=s={w}x{h}:mode=cline:rate=30:colors=0x81c8ff,setsar=1[wave]',
+                '-map', '[wave]']
+        elif p['source'].get('video_index') is not None:
+            cmd[cmd.index('-map')+1] = f"0:{p['source']['video_index']}"
         if p['source']['audio'] and not c['mute']:
             af = f'volume={c["gain"]}dB'
-            if c['normalize']:
-                af += ',loudnorm=I=-16:TP=-1.5:LRA=11'
             cmd += ['-map', '0:a:0', '-af', af, '-c:a', 'aac', '-ar', '48000', '-ac', '2']
         else:
             cmd += ['-an']
@@ -388,6 +432,10 @@ def render(p, c, dest, run):
         cmd += ['-vf', 'subtitles=captions.ass', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'copy']
     else:
         cmd += ['-c', 'copy']
+    if c['normalize'] and not c['mute'] and p['source']['audio']:
+        cmd += ['-c:a','aac','-af','loudnorm=I=-16:TP=-1.5:LRA=11','-ar','48000']
+        if '-c' in cmd:
+            cmd[cmd.index('-c')] = '-c:v'
     run(cmd + ['-movflags', '+faststart', str(temp)])
     actual = probe(temp)
     expected = sum(s['end'] - s['start'] for s in c['segments'])
@@ -397,6 +445,9 @@ def render(p, c, dest, run):
         raise ValueError('Export validation failed: audio stream mismatch')
     run(['ffmpeg', '-v', 'error', '-xerror', '-i', str(temp), '-f', 'null', '-'])
     os.replace(temp, dest)
+    atomic(dest.with_suffix('.json'), dict(source=identity(p['source']['path']), segments=c['segments'],
+        dimensions=[w,h], duration=actual['duration'], fps=actual['fps'], codec=actual['codec'],
+        audio=actual['audio'], review_rights=True, suggestion=c.get('suggestion')))
     for kind in ('srt', 'vtt'):
         dest.with_suffix('.' + kind).write_text(subtitles(c, p['transcript'], kind), encoding='utf-8')
 
@@ -414,6 +465,8 @@ def recover():
     for path in DATA.glob('*/project.json'):
         try:
             p = json.loads(path.read_text(encoding='utf-8'))
+            if p.get('schema') not in (1, 2):
+                continue
             changed = False
             for j in p.get('jobs', []):
                 if j['state'] in ('queued', 'running'):
@@ -453,7 +506,7 @@ def api(handler, method, route, query):
                 allowed = {p['source']['path']}
                 for j in p['jobs']:
                     for f in j.get('files', []):
-                        allowed.update((f, str(Path(f).with_suffix('.srt')), str(Path(f).with_suffix('.vtt'))))
+                        allowed.update((f, str(Path(f).with_suffix('.srt')), str(Path(f).with_suffix('.vtt')), str(Path(f).with_suffix('.json'))))
                 if path not in allowed:
                     raise ValueError('File is not part of this project')
                 handler._serve_file(path)
@@ -465,8 +518,8 @@ def api(handler, method, route, query):
                 result = create(body['source'])
             elif op == 'save':
                 result = save(pid, body)
-            elif op in ('export', 'analyze', 'waveform'):
-                result = start(pid, op, body.get('clips'), body.get('language', 'auto'), body.get('model', 'base'), body.get('count', 7), body.get('min_sec', 20), body.get('max_sec', 45))
+            elif op in ('export', 'analyze', 'scan', 'waveform'):
+                result = start(pid, op, body.get('clips'), body.get('language', 'auto'), body.get('model', 'base'), body.get('count', 7), body.get('min_sec', 20), body.get('max_sec', 45), body.get('profile','auto'))
             elif op == 'cancel':
                 with LOCK:
                     j = ACTIVE.get(body['job'])
