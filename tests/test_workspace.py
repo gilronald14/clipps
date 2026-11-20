@@ -167,7 +167,7 @@ class WorkspaceTests(unittest.TestCase):
             from urllib.parse import urlencode
             url='/api/workspace/file?'+urlencode({'id':p['id'],'path':source})
             status,data,headers=request('GET',url,headers={'Range':'bytes=-10'})
-            self.assertEqual(status,206);self.assertEqual(data,body[-10:])
+            self.assertEqual(status,206,data);self.assertEqual(data,body[-10:])
             self.assertEqual(request('GET',url,headers={'Range':'bytes=999999999-'})[0],416)
             self.assertEqual(request('POST','/api/upload?name=x.mp4',b'broken')[0],400)
             self.assertEqual(request('GET','/editor',headers={'Host':'evil.example'})[0],403)
