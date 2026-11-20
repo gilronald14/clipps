@@ -57,7 +57,28 @@ class OfflineTests(unittest.TestCase):
             self.assertGreater(result['clips'][1]['suggestion']['components']['motion'],0)
             result['clips'][1]['title'] = 'My edit'
             w.save(p['id'],result)
-            self.assertEqual([c['title'] for c in scan()['clips']], ['New clip','My edit'])
+            self.assertEqual([c['title'] for c in scan()['clips']], ['Manual starting clip','My edit'])
+
+    def test_missing_smart_packages_fails_before_job_is_queued(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(w, 'DATA', Path(root)):
+            media = Path(root) / 'podcast.wav'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                            'sine=duration=1', str(media)], check=True)
+            project = w.create(media)
+            with patch('importlib.util.find_spec', return_value=None):
+                with self.assertRaisesRegex(ValueError, 'Offline Smart needs local Python packages'):
+                    w.start(project['id'], 'analyze', profile='podcast')
+            self.assertEqual(w.load(project['id'])['jobs'], [])
+
+    def test_new_landscape_projects_preserve_full_frame_by_default(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(w, 'DATA', Path(root)):
+            media = Path(root) / 'wide.mp4'
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                            'testsrc2=size=320x180:duration=1:rate=10',
+                            str(media)], check=True)
+            project = w.create(media)
+            self.assertEqual(project['clips'][0]['fit'], 'blur')
+            self.assertEqual(project['clips'][0]['title'], 'Manual starting clip')
 
     def test_waveform_export_for_audio_only(self):
         with tempfile.TemporaryDirectory() as root, patch.object(w,'DATA',Path(root)):
