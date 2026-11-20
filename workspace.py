@@ -267,6 +267,18 @@ def start(pid, action, clip_ids=None, language='auto', model='base', count=7, mi
             raise ValueError('Select at least one clip')
         if action == 'waveform' and not p['source']['audio']:
             raise ValueError('This source has no audio waveform')
+        if action == 'analyze' and p['source']['audio'] and not p['transcript']:
+            # Smart transcription is optional. Detect missing packages before
+            # creating a background job so the UI shows actionable advice.
+            from importlib.util import find_spec
+            missing = [name for name in ('numpy', 'faster_whisper')
+                       if find_spec(name) is None]
+            if missing:
+                raise ValueError(
+                    'Offline Smart needs local Python packages: ' + ', '.join(missing)
+                    + '. Install them in the Python environment launching Clipps'
+                    + ' (prefer a Python 3.11 virtual environment).'
+                    + ' Or choose Pure offline (no models) to analyze without AI.')
         if not re.fullmatch(r'auto|[a-z]{2,3}', language) or model not in ('tiny', 'base', 'small', 'medium'):
             raise ValueError('Invalid transcription settings')
         count = int(number(count, 1, 30))
