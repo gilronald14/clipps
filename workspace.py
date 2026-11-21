@@ -118,7 +118,7 @@ def validate(p):
             s['end'] = number(s['end'], 0, duration)
             if s['end'] - s['start'] < 1 / 30:
                 raise ValueError('Each segment must be at least one output frame')
-        if c.get('caption_style','plain') not in ('plain','word'):
+        if c.get('caption_style','plain') not in ('plain','word','hype'):
             raise ValueError('Unknown caption style')
         if c.get('resolution','720p') not in ('720p','1080p'):
             raise ValueError('Choose 720p or 1080p')
@@ -208,6 +208,45 @@ def cues(clip, transcript, emphasize=False):
                                 end=offset + b - seg['start'], text=text))
         offset += seg['end'] - seg['start']
     return sorted(out, key=lambda x: x['start'])
+
+
+# Accent colours for the "hype" caption style, in ASS &HBBGGRR& order:
+# yellow, red, green, purple — the rotating key-word colours viral clips use.
+HYPE_ACCENTS = ('00D7FF', '4040FF', '78FF50', 'FF78AA')
+
+
+def hype_events(cues):
+    """Group word-level cues into short chunks shown together.
+
+    Each Dialogue spans one word's timing but renders the WHOLE chunk, with the
+    current word accented (colour + scale pop) — the karaoke look from viral
+    Shorts: short uppercase phrase, key word flashes, rest stays white.
+    """
+    chunks, cur = [], []
+    for cue in cues:
+        if cur and (cue['start'] - cur[-1]['end'] > .6 or len(cur) >= 4):
+            chunks.append(cur)
+            cur = []
+        cur.append(cue)
+    if cur:
+        chunks.append(cur)
+    out, accent_i = [], 0
+    for chunk in chunks:
+        start, end = chunk[0]['start'], chunk[-1]['end']
+        for i, w in enumerate(chunk):
+            w_end = chunk[i + 1]['start'] if i + 1 < len(chunk) else end
+            if w_end <= w['start']:
+                w_end = w['start'] + .05
+            words = []
+            for j, other in enumerate(chunk):
+                word = other['text'].replace('\\', '＼').replace('{', '｛').replace('}', '｝').upper()
+                if j == i and len(other['text'].strip()) >= 3:
+                    word = (f'{{\\c&H{HYPE_ACCENTS[accent_i % len(HYPE_ACCENTS)]}&'
+                            f'\\fscx115\\fscy115\\t(0,80,\\fscx100\\fscy100)}}{word}{{\\r}}')
+                    accent_i += 1
+                words.append(word)
+            out.append((w['start'], w_end, ' '.join(words)))
+    return out
 
 
 def subtitles(clip, transcript, kind='srt'):
@@ -522,7 +561,7 @@ def render(p, c, dest, run):
     (work / 'concat.txt').write_text(''.join(f"file '{x.name}'\n" for x in parts), encoding='utf-8')
     temp = dest.with_suffix('.partial.mp4')
     cmd = ['ffmpeg', '-v', 'error', '-nostdin', '-y', '-f', 'concat', '-safe', '1', '-i', 'concat.txt']
-    mapped = cues(c, p['transcript'], emphasize=c.get('caption_style')=='word')
+    mapped = cues(c, p['transcript'], emphasize=c.get('caption_style') in ('word', 'hype'))
     if c['captions'] and mapped:
         # ASS dialogue is plain text; strip override syntax and escape line breaks.
         def ts(t):
@@ -531,17 +570,32 @@ def render(p, c, dest, run):
             mm, cs = divmod(cs, 6000)
             ss, cs = divmod(cs, 100)
             return f'{hh}:{mm:02}:{ss:02}.{cs:02}'
-        color = c['color'].lstrip('#')
-        bgr = color[4:6] + color[2:4] + color[0:2]
-        ass = (f'[Script Info]\nScriptType: v4.00+\nPlayResX: {w}\nPlayResY: {h}\n'
-               '[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n'
-               f'Style: Default,Arial,{c["font_size"]},&H00{bgr},&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,50,50,90,1\n'
-               '[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n')
-        for cue in mapped:
-            txt = cue['text'].replace('\\', '＼').replace('{', '｛').replace('}', '｝').replace('\r', '').replace('\n', r'\N')
-            if cue.get('emphasized'):
-                txt = r'{\fscx108\fscy108\t(0,90,\fscx100\fscy100)}' + txt
-            ass += f'Dialogue: 0,{ts(cue["start"])},{ts(cue["end"])},Default,,0,0,0,,{txt}\n'
+        events_header = ('[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n')
+        if c.get('caption_style') == 'hype':
+            # The viral-Shorts look: heavy uppercase text in short chunks, the
+            # spoken word popping in a rotating accent colour. Sits higher than
+            # the plain style so it floats over the action.
+            header = (f'Style: Hype,Arial Black,{int(c["font_size"] * 1.4)},&H00FFFFFF,&H00FFFFFF,'
+                      '&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,1,2,40,40,'
+                      f'{int(h * 0.18)},1\n')
+            ass = (f'[Script Info]\nScriptType: v4.00+\nPlayResX: {w}\nPlayResY: {h}\n'
+                   '[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n'
+                   + header + events_header)
+            for s, e, txt in hype_events(mapped):
+                txt = txt.replace('\r', '').replace('\n', r'\N')
+                ass += f'Dialogue: 0,{ts(s)},{ts(e)},Hype,,0,0,0,,{txt}\n'
+        else:
+            color = c['color'].lstrip('#')
+            bgr = color[4:6] + color[2:4] + color[0:2]
+            header = (f'Style: Default,Arial,{c["font_size"]},&H00{bgr},&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,50,50,90,1\n')
+            ass = (f'[Script Info]\nScriptType: v4.00+\nPlayResX: {w}\nPlayResY: {h}\n'
+                   '[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\n'
+                   + header + events_header)
+            for cue in mapped:
+                txt = cue['text'].replace('\\', '＼').replace('{', '｛').replace('}', '｝').replace('\r', '').replace('\n', r'\N')
+                if cue.get('emphasized'):
+                    txt = r'{\fscx108\fscy108\t(0,90,\fscx100\fscy100)}' + txt
+                ass += f'Dialogue: 0,{ts(cue["start"])},{ts(cue["end"])},Default,,0,0,0,,{txt}\n'
         (work / 'captions.ass').write_text(ass, encoding='utf-8')
         cmd += ['-vf', 'subtitles=captions.ass', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', str(c.get('crf',20)), '-c:a', 'copy']
     else:
