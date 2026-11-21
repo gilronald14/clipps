@@ -97,7 +97,7 @@ def transcribe(source, out_path, model="base", language="en", log=print,
                 old = json.load(f)
             if (old.get("segments") and old.get("model") == model
                     and old.get("source_identity") == source_identity
-                    and old.get("requested_language") == language):
+                    and old.get("timing") == "word" and old.get("requested_language") == language):
                 log(f"  transcript cached: {len(old['segments'])} segments, "
                     f"model '{old.get('model')}'")
                 return False
@@ -108,42 +108,59 @@ def transcribe(source, out_path, model="base", language="en", log=print,
 
     dur = probe_duration(source)
     log(f"  source duration {dur:.1f}s ({dur/60:.1f} min)")
-    log("  decoding audio -> 16 kHz mono ...")
-    audio = load_audio_16k(source)
-    log(f"    {len(audio)/16000:.1f}s of audio")
-
+    from offline_scan import blocks
+    os.environ['HF_HUB_OFFLINE']='1'
     from faster_whisper import WhisperModel
     device, compute = pick_device(log)
-    log(f"  loading whisper '{model}' ({compute}, {device}) ...")
     t0 = time.time()
+
+    def decode(device, compute):
+        try:
+            model_instance = WhisperModel(model, device=device, compute_type=compute,
+                                          local_files_only=True)
+        except Exception as e:                        # noqa: BLE001
+            # The app deliberately never downloads models at runtime (offline
+            # by default). Explain that instead of surfacing a huggingface
+            # traceback when the requested size was never fetched.
+            if type(e).__name__ in ('LocalEntryNotFoundError', 'OfflineModeIsEnabled'):
+                raise SystemExit(
+                    f"The '{model}' Whisper model is not on this disk yet, and Clipps "
+                    "never downloads models silently. Fetch it once — internet is "
+                    "needed only for this step, after that everything runs offline:\n"
+                    f"    python download_models.py --whisper {model}\n"
+                    "Or pick a size that is already downloaded (tiny/base/small).")
+            raise
+        out_segments = []
+        sample_offset = 0
+        detected = language
+        from speech_chunks import windows, owned_segment
+        pcm = blocks(source, ['-vn', '-ac', '1', '-ar', '16000', '-f', 's16le'], 16000*2*120)
+        for raw, offset, left, right in windows(pcm):
+            audio = np.frombuffer(raw, '<i2').astype(np.float32) / 32768
+            sample_offset = round(right * 16000)
+            segs, info = model_instance.transcribe(audio, language=language, word_timestamps=True,
+                                                  vad_filter=True, beam_size=1)
+            for seg in segs:
+                cue = owned_segment(seg,offset,left,right,dur)
+                if cue and cue['end']>cue['start']:
+                    detected = detected or info.language
+                    out_segments.append(cue)
+            log(f"    decoded {right:.0f}s / {dur:.0f}s")
+        if not sample_offset:
+            raise ValueError("No decodable audio")
+        return out_segments, detected
+
     try:
-        m = WhisperModel(model, device=device, compute_type=compute)
-    except Exception as e:                       # noqa: BLE001
+        out_segments, detected = decode(device, compute)
+    except RuntimeError:
         if device == "cpu":
             raise
-        # A graphics card that is present but not usable -- an older driver, a
-        # missing cuDNN -- must not end the run. This has to work on machines
-        # nobody here can see, so fall back rather than fail.
-        log(f"  {device} is not usable here ({type(e).__name__}) — using the CPU")
-        device, compute = "cpu", "int8"
-        m = WhisperModel(model, device=device, compute_type=compute)
-    segs, info = m.transcribe(audio, language=language, word_timestamps=False,
-                           vad_filter=True, beam_size=1)
-    out_segments = []
-    for s in segs:
-        txt = (s.text or "").strip()
-        if txt:
-            out_segments.append({"start": round(float(s.start), 3),
-                                 "end": round(float(s.end), 3),
-                                 "text": txt})
-        if out_segments and len(out_segments) % 200 == 0:
-            el = max(time.time() - t0, 1e-6)
-            log(f"    {len(out_segments)} segments, {s.end:.0f}s/{dur:.0f}s "
-                f"({s.end/el:.1f}x realtime)")
+        log("  GPU inference failed. Retrying on CPU.")
+        out_segments, detected = decode("cpu","int8")
 
     data = {"duration": dur, "model": model, "segments": out_segments,
             "source_identity": source_identity, "requested_language": language,
-            "language": info.language, "provider": "faster-whisper", "timing": "segment"}
+            "language": detected, "provider": "faster-whisper", "timing": "word"}
     parent = os.path.dirname(os.path.abspath(out_path))
     if parent:
         os.makedirs(parent, exist_ok=True)

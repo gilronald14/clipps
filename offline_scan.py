@@ -1,0 +1,163 @@
+"""Low-resolution, one-second evidence for model-free project suggestions."""
+from array import array
+from bisect import bisect_left
+from collections import deque
+import json
+import math
+import subprocess
+import sys
+
+
+PROFILES = {
+    'auto': (.40, .35, .25),
+    'gameplay': (.30, .60, .10),
+    'interview': (.30, .10, .60),
+    'podcast': (.40, .05, .55),
+    'tutorial': (.25, .35, .40),
+    'livestream': (.40, .40, .20),
+    'vlog': (.25, .30, .45),
+}
+
+
+def blocks(path, options, size):
+    cmd = ['ffmpeg', '-nostdin', '-v', 'error', '-threads', '1', '-i', path,
+           *options, 'pipe:1']
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE) as proc:
+        try:
+            while data := proc.stdout.read(size):
+                yield data
+        finally:
+            proc.stdout.close()
+        if proc.wait():
+            raise ValueError('FFmpeg could not decode the analysis stream')
+
+
+def measure(source):
+    path = source['path']
+    audio, motion, levels = [], [], []
+    if source['audio']:
+        history = deque(maxlen=20)
+        for block in blocks(path, ['-vn', '-ac', '1', '-ar', '4000', '-f', 's16le'], 8000):
+            samples = array('h', block)
+            rms = math.sqrt(sum(v*v for v in samples) / len(samples)) / 32768
+            baseline = sum(history) / len(history) if history else rms
+            levels.append(round(rms,5))
+            # Count transitions within the second, including bursts separated by
+            # a pause that disappear in a one-second average.
+            bands = [math.sqrt(sum(v*v for v in samples[i:i+400])/len(samples[i:i+400]))/32768
+                     for i in range(0,len(samples),400)]
+            novelty = sum(abs(a-b) for a,b in zip(bands,bands[1:]))/max(1,len(bands)-1)
+            audio.append(min(1., (max(0., rms-baseline)+novelty*.6) / max(.035, baseline)))
+            history.append(rms)
+    if source.get('video', True):
+        previous = None
+        for frame in blocks(path, ['-an', '-vf', 'fps=1,scale=32:18,format=gray',
+                                    '-f', 'rawvideo'], 576):
+            if len(frame) != 576:
+                raise ValueError('Incomplete analysis frame')
+            delta = sum(abs(a-b) for a,b in zip(previous, frame)) if previous else 0
+            motion.append(min(1., delta / (576*48)))
+            previous = frame
+    return {'audio': audio, 'motion': motion, 'levels': levels}
+
+
+def rank(source, signals, cues, count, minimum, maximum, profile):
+    duration = source['duration']
+    if duration < 1/30:
+        return []
+    length = min(duration, maximum, max(minimum, (minimum + maximum)/2))
+    cues = sorted(cues, key=lambda c: c['start'])
+    starts = [c['start'] for c in cues]
+    applied = profile
+    if profile == 'auto':
+        if not source.get('video', True):
+            applied = 'podcast'
+        elif not source.get('audio', True) and not cues:
+            applied = 'gameplay'
+    weights = PROFILES[applied]
+    peaks = []
+    for second in range(math.ceil(duration)):
+        audio, motion = (signals[k][second] if second < len(signals[k]) else 0
+                         for k in ('audio', 'motion'))
+        index = bisect_left(starts, second)
+        nearby = cues[max(0,index-1):bisect_left(starts,second+1)]
+        speech = max((.45 + .25*('?' in c['text']) + .30*c['text'].endswith(('.', '!'))
+                      for c in nearby if c['end'] > second and c['text']), default=0)
+        score = sum(w*v for w,v in zip(weights,(audio,motion,speech)))
+        if score > .001:
+            peaks.append((score, second, audio, motion, speech))
+    selected = []
+    for score, second, audio, motion, speech in sorted(peaks, key=lambda p: -p[0]):
+        if any(h['start'] <= second < h['end'] for h in selected):
+            continue
+        start = min(max(0, second-length*.55), duration-length)
+        end = start + length
+        # Include the action following a scene change if the surrounding frames
+        # form a bounded burst. A hard cut alone can outrank the action itself.
+        frames = signals['motion']
+        if motion >= .12 and profile in ('auto', 'gameplay', 'tutorial', 'livestream'):
+            left = right = second
+            while left > 0 and second-left < maximum and frames[left-1] >= .08:
+                left -= 1
+            while right+1 < len(frames) and right-left < maximum and frames[right+1] >= .08:
+                right += 1
+            if 2 <= right-left+1 <= maximum-1:
+                span = min(duration, maximum, max(minimum, right-left+3))
+                start = max(0, min(left-1, duration-span))
+                end = start + span
+        i = bisect_left(starts, start)
+        if i < len(cues) and abs(starts[i]-start) <= 2 and end-starts[i] >= minimum:
+            start = starts[i]
+        i = bisect_left(starts, end)
+        if i and minimum <= cues[i-1]['end']-start <= maximum and abs(cues[i-1]['end']-end)<=3:
+            end = min(duration, cues[i-1]['end'])
+        # A nearby question can supply context for an answer. Prefer a closing
+        # sentence inside the range; a question on its own is rarely a payoff.
+        context = ''
+        if speech and applied in ('auto','podcast','interview','tutorial','vlog'):
+            first = bisect_left(starts, max(0,second-maximum))
+            last = bisect_left(starts, second+2)
+            for index in reversed(range(first,last)):
+                question = cues[index]
+                if not question['text'].rstrip().endswith('?'):
+                    continue
+                for answer in cues[index+1:bisect_left(starts, question['start']+maximum)]:
+                    span = answer['end']-question['start']
+                    if (minimum <= span <= maximum and answer['end'] >= second
+                            and answer['text'].rstrip().endswith(('.','!'))):
+                        start, end = question['start'], answer['end']
+                        context = ' Includes a question and the following sentence ending.'
+                        break
+                if context:
+                    break
+        levels=signals.get('levels',[])
+        if levels and not context and speech==0:
+            # Move a cut to a nearby quiet interval only when it still includes
+            # the detected event and satisfies the requested running time.
+            for edge in ('start','end'):
+                target=start if edge=='start' else end
+                quiet=[i+.5 for i in range(max(0,int(target)-1),min(len(levels),int(target)+2))
+                       if levels[i]<.008]
+                if quiet:
+                    cut=min(quiet,key=lambda i:abs(i-target))
+                    if edge=='start' and cut<second and minimum<=end-cut<=maximum:
+                        start=cut
+                    if edge=='end' and second<cut<=duration and minimum<=cut-start<=maximum:
+                        end=cut
+        if any(min(end,h['end']) > max(start,h['start']) for h in selected):
+            continue
+        evidence = dict(audio=round(audio,3), motion=round(motion,3), speech=round(speech,3))
+        strongest = max(zip(weights,(audio,motion,speech),evidence),key=lambda t:t[0]*t[1])[2]
+        selected.append(dict(start=start,end=end,peak=second,score=round(score,4),
+                             components=evidence,profile_used=applied,
+                             reason=f'Strongest signal: {strongest} near {second}s.' + context))
+        if len(selected)==count:
+            break
+    return selected
+
+
+if __name__ == '__main__':
+    from workspace import atomic
+    with open(sys.argv[1], encoding='utf-8') as f:
+        source = json.load(f)
+    atomic(sys.argv[2], measure(source))

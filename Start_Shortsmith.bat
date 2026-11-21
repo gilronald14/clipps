@@ -14,9 +14,16 @@ cd /d "%~dp0"
 
 set "PY="
 
+REM A Python recorded by a successful setup wins over PATH, so a good
+REM install is not shadowed by a newer-but-incompatible one.
+set "RECORDED="
+if exist "%~dp0python_path.txt" set /p RECORDED=<"%~dp0python_path.txt"
+if defined RECORDED call :try "%RECORDED%"
+
 REM Test each candidate for the libraries the renderer needs, rather than
 REM trusting the first "python" on PATH - a Windows Store python.exe stub
 REM shadows real installs and would fail later, at the worst moment.
+call :try "%~dp0.venv\Scripts\python.exe"
 call :try python
 call :try py -3
 call :try "C:\Python314\python.exe"
@@ -32,7 +39,7 @@ call :try "C:\Program Files\Python312\python.exe"
 
 if not defined PY (
   echo.
-  echo   Could not find a Python with the libraries this needs.
+  echo   Could not find Python 3.9 or newer.
   echo   Run setup.bat once and it will sort that out.
   echo.
   pause
@@ -52,6 +59,6 @@ exit /b 0
 :try
 REM %* is the candidate command; skip if we already have one
 if defined PY goto :eof
-%* -c "import mediapipe,faster_whisper,cv2" >nul 2>&1
+%* -c "import sys; assert sys.version_info >= (3,9)" >nul 2>&1
 if not errorlevel 1 set "PY=%*"
 goto :eof

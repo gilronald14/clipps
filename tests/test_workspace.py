@@ -108,6 +108,19 @@ class WorkspaceTests(unittest.TestCase):
         shutil.copyfile(dest,evidence/'smoke-edited.mp4')
         (evidence/'smoke-ffprobe.json').write_text(json.dumps(d,indent=2))
 
+    def test_export_folder_copies_consistent_sidecars(self):
+        p=w.create(self.source)
+        p['transcript']=[{'start':.1,'end':.8,'text':'Hello'}]
+        p=w.save(p['id'],p)
+        out=Path(self.dir.name)/'out'
+        result=self.wait_job(p,w.start(p['id'],'export',[p['clips'][0]['id']],out_dir=str(out)))
+        self.assertEqual(result['state'],'completed',result.get('error'))
+        mp4=Path(result['copied'][0])
+        self.assertTrue(mp4.exists())
+        stem=mp4.stem
+        self.assertEqual({x.name for x in out.iterdir()},{stem+ext for ext in ('.mp4','.srt','.vtt','.json')})
+        self.assertEqual(result['exported_to'],str(out))
+
     def test_real_noaudio_portrait_export(self):
         p=w.create(self.noaudio)
         p['clips'][0]['segments']=[{'start':0,'end':1}]
@@ -167,7 +180,7 @@ class WorkspaceTests(unittest.TestCase):
             from urllib.parse import urlencode
             url='/api/workspace/file?'+urlencode({'id':p['id'],'path':source})
             status,data,headers=request('GET',url,headers={'Range':'bytes=-10'})
-            self.assertEqual(status,206);self.assertEqual(data,body[-10:])
+            self.assertEqual(status,206,data);self.assertEqual(data,body[-10:])
             self.assertEqual(request('GET',url,headers={'Range':'bytes=999999999-'})[0],416)
             self.assertEqual(request('POST','/api/upload?name=x.mp4',b'broken')[0],400)
             self.assertEqual(request('GET','/editor',headers={'Host':'evil.example'})[0],403)

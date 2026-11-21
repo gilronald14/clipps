@@ -26,6 +26,7 @@ import math
 import uuid
 import workspace
 import os
+import mimetypes
 import re
 import subprocess
 import sys
@@ -39,7 +40,7 @@ sys.path.insert(0, _HERE)
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SHORTSMITH_PORT", "8765"))
-VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".flv")
+VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".flv", ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac")
 UPLOAD_DIR = os.path.join(_HERE, "uploads")
 
 # One render at a time, matching the pipeline: transcoding is CPU-bound, and
@@ -217,7 +218,8 @@ def start_job(opts):
         proc = subprocess.Popen(cmd, cwd=_HERE, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,
                                 encoding="utf-8", errors="replace", bufsize=1,
-                                start_new_session=os.name != 'nt')
+                                start_new_session=os.name != 'nt',
+                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:
         JOB.set(state='failed')
         return {'error': str(e)}
@@ -243,6 +245,16 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "Shortsmith"
     protocol_version = "HTTP/1.1"
 
+    def handle(self):
+        # Browsers often cancel an idle HTTP keep-alive connection when a video
+        # seeks or the tab reloads. On Windows this can surface as WinError 10053.
+        # Suppress only expected transport disconnects; real application errors
+        # must still produce tracebacks.
+        try:
+            super().handle()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            return
+
     def log_message(self, fmt, *args):
         pass                                   # the page has its own log
 
@@ -261,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
 
     def _json_body(self):
@@ -461,7 +473,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
         length = end - start + 1
         ctype = "video/mp4" if path.lower().endswith((".mp4", ".m4v")) else \
-                "application/octet-stream"
+                mimetypes.guess_type(path)[0] or "application/octet-stream"
         self.send_response(206 if m else 200)
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
@@ -500,7 +512,7 @@ def main():
     print("=" * 66)
     try:
         import webbrowser
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.8, lambda: webbrowser.open(url + "editor")).start()
     except Exception:                                    # noqa: BLE001
         pass
     try:

@@ -1,3 +1,5 @@
+> Current changes to analysis, project format, and export settings are documented in [Offline Studio](OFFLINE_STUDIO.md).
+
 # Clipps workspace
 
 ## Setup and run
@@ -23,7 +25,7 @@ python doctor.py
 ```
 
 Review the original setup instructions and model licenses before downloading
-optional face/speaker models. Whisper weights may download on first use. CPU int8
+optional face/speaker models. Prepare Whisper weights before offline use. See [the current studio guide](OFFLINE_STUDIO.md). CPU int8
 is supported by the existing provider. Automatic detection and English/Tagalog
 language overrides are exposed; mixed-language accuracy is not established.
 Whisper is the sole transcription provider in this increment.
