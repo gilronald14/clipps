@@ -14,6 +14,12 @@ cd /d "%~dp0"
 
 set "PY="
 
+REM A Python recorded by a successful setup wins over PATH, so a good
+REM install is not shadowed by a newer-but-incompatible one.
+set "RECORDED="
+if exist "%~dp0python_path.txt" set /p RECORDED=<"%~dp0python_path.txt"
+if defined RECORDED call :try "%RECORDED%"
+
 REM Test each candidate for the libraries the renderer needs, rather than
 REM trusting the first "python" on PATH - a Windows Store python.exe stub
 REM shadows real installs and would fail later, at the worst moment.

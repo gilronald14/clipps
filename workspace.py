@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -244,7 +245,7 @@ def update_job(pid, jid, **values):
         atomic(folder(pid) / 'project.json', p)
 
 
-def start(pid, action, clip_ids=None, language='auto', model='base', count=7, min_sec=20, max_sec=45, profile='auto', platform='YouTube Shorts', resolution='720p'):
+def start(pid, action, clip_ids=None, language='auto', model='base', count=7, min_sec=20, max_sec=45, profile='auto', platform='YouTube Shorts', resolution='720p', out_dir=None):
     with LOCK:
         legacy = __import__('sys').modules.get('webapp')
         if legacy and legacy.JOB.state == 'running':
@@ -284,9 +285,16 @@ def start(pid, action, clip_ids=None, language='auto', model='base', count=7, mi
         count = int(number(count, 1, 30))
         min_sec = number(min_sec, 1, 600)
         max_sec = number(max_sec, min_sec, 600)
+        export_dir = None
+        if action == 'export' and out_dir:
+            export_dir = str(Path(out_dir))
+            try:
+                Path(export_dir).mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                raise ValueError(f'Cannot use that export folder: {e}')
         jid = uuid.uuid4().hex
         job = dict(id=jid, action=action, state='queued', stage='queued',
-                   progress=None, files=[], error='', options=dict(count=count, min_sec=min_sec, max_sec=max_sec, profile=profile, platform=platform, resolution=resolution), revision=p['revision'], created=time.time())
+                   progress=None, files=[], error='', options=dict(count=count, min_sec=min_sec, max_sec=max_sec, profile=profile, platform=platform, resolution=resolution, out_dir=export_dir), revision=p['revision'], created=time.time())
         p['jobs'] = (p['jobs'] + [job])[-30:]
         atomic(folder(pid) / 'project.json', p)
         cancel = threading.Event()
@@ -438,7 +446,26 @@ def worker(p, job, selected, language, model):
                 dest = work / f'{idx+1:02}_{name}.mp4'
                 render(p, c, dest, run)
                 files.append(str(dest))
-            update_job(pid, jid, state='completed', stage='completed', progress=1, files=files)
+            # Copy finished clips and their sidecars to the requested export
+            # folder, so they are not buried in projects/<id>/<job>/. Sidecars
+            # keep the MP4's final stem, so subtitle files still auto-load.
+            export_dir = job['options'].get('out_dir')
+            copied = []
+            if export_dir:
+                root = Path(export_dir)
+                for f in files:
+                    src = Path(f)
+                    target = root / src.name
+                    if target.exists():
+                        target = root / f'{src.stem} ({uuid.uuid4().hex[:4]}){src.suffix}'
+                    shutil.copy2(src, target)
+                    copied.append(str(target))
+                    for ext in ('.srt', '.vtt', '.json'):
+                        side = src.with_suffix(ext)
+                        if side.exists():
+                            shutil.copy2(side, root / (target.stem + ext))
+            update_job(pid, jid, state='completed', stage='completed', progress=1, files=files,
+                       exported_to=export_dir or '', copied=copied)
     except InterruptedError:
         update_job(pid, jid, state='cancelled', stage='cancelled')
     except Exception as e:
@@ -631,7 +658,7 @@ def api(handler, method, route, query):
             elif op == 'save':
                 result = save(pid, body)
             elif op in ('export', 'preview', 'analyze', 'scan', 'proxy', 'waveform'):
-                result = start(pid, op, body.get('clips'), body.get('language', 'auto'), body.get('model', 'base'), body.get('count', 7), body.get('min_sec', 20), body.get('max_sec', 45), body.get('profile','auto'), body.get('platform','YouTube Shorts'), body.get('resolution','720p'))
+                result = start(pid, op, body.get('clips'), body.get('language', 'auto'), body.get('model', 'base'), body.get('count', 7), body.get('min_sec', 20), body.get('max_sec', 45), body.get('profile','auto'), body.get('platform','YouTube Shorts'), body.get('resolution','720p'), body.get('out_dir'))
             elif op == 'cancel':
                 with LOCK:
                     j = ACTIVE.get(body['job'])
@@ -680,5 +707,13 @@ if __name__ == '__main__':
             raise SystemExit('Audio decoding failed')
         atomic(sys.argv[3], {'hop': hop / 1000, 'rms': bins})
     elif len(sys.argv) == 6 and sys.argv[1] == '--transcribe':
-        from transcribe_source import transcribe
+        # A raw traceback here would surface in the UI; explain instead. The
+        # scheduler pre-checks most cases, this covers anything it missed.
+        try:
+            from transcribe_source import transcribe
+        except ImportError as missing:
+            raise SystemExit(
+                'Offline smart needs local transcription libraries that are not installed '
+                f'(missing: {missing.name}). Use Pure offline mode — it needs no models — '
+                'or run setup.bat on a connected PC to install them.')
         transcribe(sys.argv[2], sys.argv[3], language=None if sys.argv[4] == 'auto' else sys.argv[4], model=sys.argv[5], reuse=False)

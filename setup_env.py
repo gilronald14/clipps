@@ -18,6 +18,7 @@ doctor.py says so and prints where to get it.
 import argparse
 import importlib.util
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -104,7 +105,20 @@ def main():
                 print("\n  pip failed. Common causes:")
                 print("    - no internet, or a proxy is blocking pypi.org")
                 print("    - a very new Python with no wheels yet; try 3.10-3.12")
+                if v >= (3, 13):
+                    print(f"    - this is Python {v.major}.{v.minor}: the 'tokenizers' and 'av'")
+                    print("      wheels behind faster-whisper do not exist for it yet, so pip")
+                    print("      tried to compile them and demanded Rust. That cannot work")
+                    print("      here. Install Python 3.12 from python.org and re-run setup.")
                 return 1
+
+    # Record the Python that just got its libraries sorted, so the .bat
+    # launchers prefer it over whatever happens to be first on PATH (a newer
+    # python without wheels would otherwise shadow this one forever).
+    try:
+        Path(_HERE, "python_path.txt").write_text(sys.executable, encoding="utf-8")
+    except OSError:
+        pass
 
     # ---- models
     print("\n[3/4] models")

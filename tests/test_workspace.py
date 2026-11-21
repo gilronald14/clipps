@@ -108,6 +108,19 @@ class WorkspaceTests(unittest.TestCase):
         shutil.copyfile(dest,evidence/'smoke-edited.mp4')
         (evidence/'smoke-ffprobe.json').write_text(json.dumps(d,indent=2))
 
+    def test_export_folder_copies_consistent_sidecars(self):
+        p=w.create(self.source)
+        p['transcript']=[{'start':.1,'end':.8,'text':'Hello'}]
+        p=w.save(p['id'],p)
+        out=Path(self.dir.name)/'out'
+        result=self.wait_job(p,w.start(p['id'],'export',[p['clips'][0]['id']],out_dir=str(out)))
+        self.assertEqual(result['state'],'completed',result.get('error'))
+        mp4=Path(result['copied'][0])
+        self.assertTrue(mp4.exists())
+        stem=mp4.stem
+        self.assertEqual({x.name for x in out.iterdir()},{stem+ext for ext in ('.mp4','.srt','.vtt','.json')})
+        self.assertEqual(result['exported_to'],str(out))
+
     def test_real_noaudio_portrait_export(self):
         p=w.create(self.noaudio)
         p['clips'][0]['segments']=[{'start':0,'end':1}]

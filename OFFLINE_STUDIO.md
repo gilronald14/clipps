@@ -91,12 +91,16 @@ unique folder under the requested output directory.
    full frame. Safe-area guides are preview-only. If native playback is slow
    or unsupported, build a lightweight preview. Scan again after editing. Repeated
    suggestions retain the original edited clip in the project.
-5. Choose square, vertical or landscape and 720p or 1080p. Export one or all.
+5. Choose square, vertical or landscape and 720p or 1080p. Optionally set a
+   **Save clips to this folder** path; every finished export (MP4 plus its
+   SRT, VTT and JSON sidecars, which keep the MP4's file stem) is copied
+   there in addition to the project copy. Export one or all.
    Vertical H.264/AAC MP4 is the shared delivery format for Shorts, TikTok
    and Reels. The Jobs section links MP4, SRT, VTT and JSON export details.
-   The files live under `projects/<project-id>/<job-id>/`. Projects reopen
-   from the editor. Cancel an active job in Jobs. Restarting marks abandoned
-   jobs interrupted. Retry from the saved edit.
+   The files live under `projects/<project-id>/<job-id>/`, or in the chosen
+   folder when one is set. Projects reopen from the editor. Cancel an active
+   job in Jobs. Restarting marks abandoned jobs interrupted. Retry from the
+   saved edit.
 
 YouTube supports eligible square or vertical Shorts up to three minutes. A
 Short over one minute with an active copyright claim, including a manual claim,

@@ -20,6 +20,12 @@ echo.
 
 set "PY="
 
+REM A Python recorded by a previous successful setup wins over PATH, so a
+REM good install is not shadowed by a newer-but-incompatible one.
+set "RECORDED="
+if exist "%~dp0python_path.txt" set /p RECORDED=<"%~dp0python_path.txt"
+if defined RECORDED call :try "%RECORDED%"
+
 REM Search the usual places. The version test doubles as a filter: the
 REM Windows Store "python.exe" alias is a stub that fails it, so simply
 REM taking the first "python" on PATH is not safe.
