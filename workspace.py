@@ -313,7 +313,8 @@ def worker(p, job, selected, language, model):
             raise InterruptedError('Cancelled')
         with open(work / 'process.log', 'w', encoding='utf-8') as log:
             proc = subprocess.Popen(args, cwd=work, stdout=log, stderr=subprocess.STDOUT,
-                                    start_new_session=os.name != 'nt')
+                                    start_new_session=os.name != 'nt',
+                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
             with LOCK:
                 ctl['proc'] = proc
             try:

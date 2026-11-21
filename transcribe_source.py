@@ -115,8 +115,21 @@ def transcribe(source, out_path, model="base", language="en", log=print,
     t0 = time.time()
 
     def decode(device, compute):
-        model_instance = WhisperModel(model, device=device, compute_type=compute,
-                                     local_files_only=True)
+        try:
+            model_instance = WhisperModel(model, device=device, compute_type=compute,
+                                          local_files_only=True)
+        except Exception as e:                        # noqa: BLE001
+            # The app deliberately never downloads models at runtime (offline
+            # by default). Explain that instead of surfacing a huggingface
+            # traceback when the requested size was never fetched.
+            if type(e).__name__ in ('LocalEntryNotFoundError', 'OfflineModeIsEnabled'):
+                raise SystemExit(
+                    f"The '{model}' Whisper model is not on this disk yet, and Clipps "
+                    "never downloads models silently. Fetch it once — internet is "
+                    "needed only for this step, after that everything runs offline:\n"
+                    f"    python download_models.py --whisper {model}\n"
+                    "Or pick a size that is already downloaded (tiny/base/small).")
+            raise
         out_segments = []
         sample_offset = 0
         detected = language

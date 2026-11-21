@@ -8,11 +8,23 @@ fetches what is missing.
 
     python download_models.py            # all of them
     python download_models.py --check    # report what is present, download nothing
+    python download_models.py --whisper base,medium   # pre-cache Whisper sizes
+
+Whisper weights live in the huggingface cache (%USERPROFILE%\\.cache\\huggingface),
+NOT in models/ — the pipeline reads them with local_files_only=True, so a size
+must be fetched here once before transcription can run fully offline.
 """
 import argparse
 import os
 import sys
 import urllib.request
+
+WHISPER_REPOS = {
+    "tiny": "Systran/faster-whisper-tiny",
+    "base": "Systran/faster-whisper-base",
+    "small": "Systran/faster-whisper-small",
+    "medium": "Systran/faster-whisper-medium",
+}
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 MODELS = os.path.join(_HERE, "models")
@@ -112,6 +124,9 @@ def main():
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true",
                     help="report only, download nothing")
+    ap.add_argument("--whisper", default="",
+                    help="comma-separated Whisper sizes to pre-cache: "
+                         "tiny,base,small,medium")
     a = ap.parse_args()
 
     print(f"models -> {MODELS}\n")
@@ -134,6 +149,36 @@ def main():
         ok, _ = fetch(dest, url, expect)
         if not ok:
             missing.append(rel)
+
+    # Whisper sizes: cached in the huggingface hub cache, not models/.
+    for size in [s.strip().lower() for s in a.whisper.split(",") if s.strip()]:
+        if size not in WHISPER_REPOS:
+            print(f"  FAILED  unknown Whisper size '{size}' "
+                  f"(choose from: {', '.join(WHISPER_REPOS)})")
+            missing.append(f"whisper/{size}")
+            continue
+        try:
+            from faster_whisper.utils import download_model
+        except ImportError:
+            print("  FAILED  faster-whisper is not installed — run setup.bat first")
+            missing.append(f"whisper/{size}")
+            continue
+        if a.check:
+            try:
+                from huggingface_hub import snapshot_download
+                snapshot_download(WHISPER_REPOS[size], local_files_only=True)
+                print(f"  ok      whisper {size}  (cached)")
+            except Exception:                     # noqa: BLE001
+                print(f"  MISSING whisper {size} — run with --whisper {size} "
+                      "while online")
+                missing.append(f"whisper/{size}")
+            continue
+        try:
+            path = download_model(size)          # skips files already cached
+            print(f"  done    whisper {size}  -> {path}")
+        except Exception as e:                   # noqa: BLE001
+            print(f"  FAILED  whisper {size}: {type(e).__name__}: {e}")
+            missing.append(f"whisper/{size}")
 
     print()
     if a.check:

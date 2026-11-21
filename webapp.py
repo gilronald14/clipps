@@ -218,7 +218,8 @@ def start_job(opts):
         proc = subprocess.Popen(cmd, cwd=_HERE, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,
                                 encoding="utf-8", errors="replace", bufsize=1,
-                                start_new_session=os.name != 'nt')
+                                start_new_session=os.name != 'nt',
+                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
     except (OSError, ValueError, subprocess.TimeoutExpired) as e:
         JOB.set(state='failed')
         return {'error': str(e)}
